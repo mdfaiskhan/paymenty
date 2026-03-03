@@ -1,0 +1,12 @@
+@mixin card {
+  background: $panel;
+  border-radius: 16px;
+  box-shadow: $shadow;
+  border: 1px solid $border;
+}
+
+@mixin button-reset {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}

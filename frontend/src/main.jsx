@@ -1,0 +1,20 @@
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import App from "./App";
+import { AuthProvider } from "./context/AuthContext";
+import { AnalyticsProvider } from "./context/AnalyticsContext";
+import "./styles/layout.scss";
+import "./styles/components.scss";
+
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <AuthProvider>
+        <AnalyticsProvider>
+          <App />
+        </AnalyticsProvider>
+      </AuthProvider>
+    </BrowserRouter>
+  </React.StrictMode>
+);
