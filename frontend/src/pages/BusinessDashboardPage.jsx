@@ -32,6 +32,7 @@ export default function BusinessDashboardPage() {
 
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("monthTotalDesc");
+  const [sortRange, setSortRange] = useState("month");
   const [addHoursEmployee, setAddHoursEmployee] = useState(null);
   const [historyEmployee, setHistoryEmployee] = useState(null);
   const [editEmployee, setEditEmployee] = useState(null);
@@ -78,13 +79,18 @@ export default function BusinessDashboardPage() {
   const sortedRows = useMemo(() => {
     const copy = [...filteredRows];
     const num = (v) => Number(v) || 0;
+    const rangeTotal = (row) => {
+      if (sortRange === "today") return num(row.today?.total);
+      if (sortRange === "week") return num(row.week?.total);
+      return num(row.month?.total);
+    };
 
     copy.sort((a, b) => {
       if (sortBy === "monthTotalAsc") {
-        return num(a.month?.total) - num(b.month?.total);
+        return rangeTotal(a) - rangeTotal(b);
       }
       if (sortBy === "todayTotalDesc") {
-        return num(b.today?.total) - num(a.today?.total);
+        return rangeTotal(b) - rangeTotal(a);
       }
       if (sortBy === "nameAsc") {
         return String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" });
@@ -92,11 +98,11 @@ export default function BusinessDashboardPage() {
       if (sortBy === "nameDesc") {
         return String(b.name || "").localeCompare(String(a.name || ""), undefined, { sensitivity: "base" });
       }
-      return num(b.month?.total) - num(a.month?.total);
+      return rangeTotal(b) - rangeTotal(a);
     });
 
     return copy;
-  }, [filteredRows, sortBy]);
+  }, [filteredRows, sortBy, sortRange]);
 
   async function addEmployee(payload) {
     await createEmployeeApi(payload);
@@ -269,11 +275,15 @@ export default function BusinessDashboardPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
           <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-            <option value="monthTotalDesc">Monthly Earnings: High to Low</option>
-            <option value="monthTotalAsc">Monthly Earnings: Low to High</option>
-            <option value="todayTotalDesc">Today Earnings: High to Low</option>
+            <option value="todayTotalDesc">Range Earnings: High to Low</option>
+            <option value="monthTotalAsc">Range Earnings: Low to High</option>
             <option value="nameAsc">Name: A to Z</option>
             <option value="nameDesc">Name: Z to A</option>
+          </select>
+          <select value={sortRange} onChange={(e) => setSortRange(e.target.value)}>
+            <option value="today">Today</option>
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
           </select>
           <button className="button ghost" onClick={exportEmployeesCsv} type="button">
             Export CSV

@@ -32,6 +32,25 @@
   line-height: 1.1;
 }
 
+.payment-metric-grid {
+  margin-bottom: 16px;
+}
+
+.payment-metric-card {
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+}
+
+.payment-metric-card.pending {
+  border: 1px solid #ffd8d8;
+  background: linear-gradient(180deg, #fff7f7 0%, #fff1f1 100%);
+}
+
+.payment-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 10px;
+}
+
 .metric-card small {
   display: block;
   margin-top: 10px;
@@ -260,6 +279,10 @@ select {
 
   .inline-form {
     display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .payment-form-grid {
     grid-template-columns: 1fr;
   }
 

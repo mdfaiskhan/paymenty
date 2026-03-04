@@ -28,6 +28,7 @@ const createWorkSchema = z.object({
 
 const updateWorkSchema = z.object({
   body: z.object({
+    workDate: dateOnly.optional(),
     hours: hoursSchema.optional(),
     videoId: z.string().trim().max(120).optional(),
     note: z.string().trim().max(300).optional()

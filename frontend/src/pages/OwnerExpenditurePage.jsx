@@ -4,12 +4,18 @@ import { downloadCsv } from "../utils/csv";
 import { getCurrentMonth, todayDateOnly } from "../utils/date";
 import { formatTwoDecimals } from "../utils/number";
 import DurationPicker from "../components/DurationPicker";
+import { getPaymentsSummaryApi } from "../api/paymentApi";
 import {
   addOwnerCommissionRuleApi,
+  createOwnerPaymentApi,
   createOwnerApi,
+  deleteOwnerPaymentApi,
   deleteOwnerApi,
   getOwnerBreakdownApi,
+  getOwnerPaymentsApi,
+  getOwnerPaymentsSummaryApi,
   getOwnersAnalyticsApi,
+  updateOwnerPaymentApi,
   upsertOwnerDailyHoursApi,
   updateOwnerApi
 } from "../api/ownerApi";
@@ -20,6 +26,31 @@ function formatMoney(v) {
 
 function formatHours(v) {
   return formatTwoDecimals(v, 0);
+}
+
+function humanDate(input) {
+  if (!input) return "-";
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleDateString();
+}
+
+function getMonthBounds() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return {
+    start: start.toISOString().slice(0, 10),
+    end: end.toISOString().slice(0, 10)
+  };
+}
+
+function buildStatus(computedAmount, paidAmount) {
+  const computed = Number(computedAmount) || 0;
+  const paid = Number(paidAmount) || 0;
+  if (paid <= 0) return "pending";
+  if (paid >= computed) return "paid";
+  return "partial";
 }
 
 export default function OwnerExpenditurePage() {
@@ -59,13 +90,58 @@ export default function OwnerExpenditurePage() {
     hours: 1,
     note: ""
   });
+  const [ownerSettlement, setOwnerSettlement] = useState({
+    totalEarned: 0,
+    totalPaid: 0,
+    pendingBalance: 0,
+    paymentHistory: []
+  });
+  const [ownerSettlementRows, setOwnerSettlementRows] = useState([]);
+  const [businessSettlement, setBusinessSettlement] = useState({
+    tailorEarned: 0,
+    butcherEarned: 0,
+    totalEarned: 0
+  });
+  const [recordOwnerPayment, setRecordOwnerPayment] = useState(null);
+  const [recordOwnerPaymentForm, setRecordOwnerPaymentForm] = useState({
+    periodStart: getMonthBounds().start,
+    periodEnd: getMonthBounds().end,
+    paidAmount: 0,
+    method: "bank",
+    referenceId: "",
+    notes: ""
+  });
+  const [historyOwner, setHistoryOwner] = useState(null);
+  const [editOwnerPayment, setEditOwnerPayment] = useState(null);
+  const [editOwnerPaymentForm, setEditOwnerPaymentForm] = useState({
+    paidAmount: 0,
+    status: "pending",
+    method: "bank",
+    referenceId: "",
+    notes: ""
+  });
 
   async function loadAnalytics() {
     setLoading(true);
     setError("");
     try {
-      const data = await getOwnersAnalyticsApi();
+      const [data, settlementSummary, settlementRows, tailorSummary, butcherSummary] = await Promise.all([
+        getOwnersAnalyticsApi(),
+        getOwnerPaymentsSummaryApi({ rangeType: "month" }),
+        getOwnerPaymentsApi({ rangeType: "month" }),
+        getPaymentsSummaryApi({ businessType: "tailor", rangeType: "month" }),
+        getPaymentsSummaryApi({ businessType: "butcher", rangeType: "month" })
+      ]);
       setAnalytics(data);
+      setOwnerSettlement(settlementSummary);
+      setOwnerSettlementRows(settlementRows.rows || []);
+      const tailorEarned = Number(tailorSummary?.totalEarned) || 0;
+      const butcherEarned = Number(butcherSummary?.totalEarned) || 0;
+      setBusinessSettlement({
+        tailorEarned,
+        butcherEarned,
+        totalEarned: tailorEarned + butcherEarned
+      });
     } catch (err) {
       setError(err.response?.data?.message || "Failed to load owner analytics");
     } finally {
@@ -116,6 +192,9 @@ export default function OwnerExpenditurePage() {
     }
     setUnlocked(false);
     setAnalytics({ cards: {}, owners: [] });
+    setOwnerSettlement({ totalEarned: 0, totalPaid: 0, pendingBalance: 0, paymentHistory: [] });
+    setOwnerSettlementRows([]);
+    setBusinessSettlement({ tailorEarned: 0, butcherEarned: 0, totalEarned: 0 });
     setBreakdownOwner(null);
     setCommissionModal(null);
     setOwnerFormOpen(false);
@@ -123,14 +202,27 @@ export default function OwnerExpenditurePage() {
 
   const ownerRows = useMemo(() => {
     const rows = [...(analytics.owners || [])];
-    rows.sort((a, b) => {
+    const settlementByOwner = new Map(
+      (ownerSettlementRows || []).map((row) => [String(row.ownerId), row])
+    );
+    const merged = rows.map((row) => {
+      const financial = settlementByOwner.get(String(row.ownerId));
+      return {
+        ...row,
+        earnedMoney: financial?.totalEarned || 0,
+        paidMoney: financial?.totalPaid || 0,
+        toBePaidMoney: financial?.pendingBalance || 0,
+        lastPaymentDate: financial?.lastPaymentDate || null
+      };
+    });
+    merged.sort((a, b) => {
       if (sortBy === "monthAsc") return (a.monthCommission || 0) - (b.monthCommission || 0);
       if (sortBy === "todayDesc") return (b.todayCommission || 0) - (a.todayCommission || 0);
       if (sortBy === "nameAsc") return String(a.name || "").localeCompare(String(b.name || ""));
       return (b.monthCommission || 0) - (a.monthCommission || 0);
     });
-    return rows;
-  }, [analytics.owners, sortBy]);
+    return merged;
+  }, [analytics.owners, ownerSettlementRows, sortBy]);
 
   async function submitOwner(e) {
     e.preventDefault();
@@ -270,6 +362,79 @@ export default function OwnerExpenditurePage() {
     }
   }
 
+  function openRecordOwnerPayment(owner) {
+    const month = getMonthBounds();
+    setRecordOwnerPayment(owner);
+    setRecordOwnerPaymentForm({
+      periodStart: month.start,
+      periodEnd: month.end,
+      paidAmount: Math.max(0, Number(owner.toBePaidMoney) || 0),
+      method: "bank",
+      referenceId: "",
+      notes: ""
+    });
+  }
+
+  async function saveOwnerPayment(e) {
+    e.preventDefault();
+    if (!recordOwnerPayment) return;
+    await createOwnerPaymentApi({
+      ownerId: recordOwnerPayment.ownerId,
+      periodStart: recordOwnerPaymentForm.periodStart,
+      periodEnd: recordOwnerPaymentForm.periodEnd,
+      paidAmount: Number(recordOwnerPaymentForm.paidAmount) || 0,
+      method: recordOwnerPaymentForm.method,
+      referenceId: recordOwnerPaymentForm.referenceId,
+      notes: recordOwnerPaymentForm.notes,
+      status: buildStatus(recordOwnerPayment.earnedMoney, recordOwnerPaymentForm.paidAmount)
+    });
+    setRecordOwnerPayment(null);
+    await loadAnalytics();
+  }
+
+  function openOwnerPaymentHistory(owner) {
+    setHistoryOwner(owner);
+  }
+
+  const ownerPaymentHistoryRows = useMemo(() => {
+    if (!historyOwner) return [];
+    return (ownerSettlement.paymentHistory || []).filter(
+      (row) => String(row.ownerId || "") === String(historyOwner.ownerId || "")
+    );
+  }, [historyOwner, ownerSettlement.paymentHistory]);
+
+  function openEditOwnerPayment(row) {
+    setEditOwnerPayment(row);
+    setEditOwnerPaymentForm({
+      paidAmount: Number(row.paidAmount) || 0,
+      status: row.status || "pending",
+      method: row.method || "bank",
+      referenceId: row.referenceId || "",
+      notes: row.notes || ""
+    });
+  }
+
+  async function saveEditedOwnerPayment(e) {
+    e.preventDefault();
+    if (!editOwnerPayment) return;
+    await updateOwnerPaymentApi(editOwnerPayment.id, {
+      paidAmount: Number(editOwnerPaymentForm.paidAmount) || 0,
+      status: editOwnerPaymentForm.status,
+      method: editOwnerPaymentForm.method,
+      referenceId: editOwnerPaymentForm.referenceId,
+      notes: editOwnerPaymentForm.notes
+    });
+    setEditOwnerPayment(null);
+    await loadAnalytics();
+  }
+
+  async function removeOwnerPayment(row) {
+    const ok = window.confirm("Delete this owner payment record?");
+    if (!ok) return;
+    await deleteOwnerPaymentApi(row.id);
+    await loadAnalytics();
+  }
+
   return (
     <section>
       {!unlocked ? (
@@ -317,16 +482,28 @@ export default function OwnerExpenditurePage() {
 
       <div className="metric-grid">
         <article className="card metric-card">
-          <p>Today Commission</p>
-          <h3>INR {formatMoney(analytics.cards?.todayCommission)}</h3>
+          <p>Tailor Earned (Month)</p>
+          <h3>INR {formatMoney(businessSettlement.tailorEarned)}</h3>
         </article>
         <article className="card metric-card">
-          <p>This Week Commission</p>
-          <h3>INR {formatMoney(analytics.cards?.weekCommission)}</h3>
+          <p>Butcher Earned (Month)</p>
+          <h3>INR {formatMoney(businessSettlement.butcherEarned)}</h3>
         </article>
         <article className="card metric-card">
-          <p>This Month Commission</p>
-          <h3>INR {formatMoney(analytics.cards?.monthCommission)}</h3>
+          <p>Total Business Earned (Month)</p>
+          <h3>INR {formatMoney(businessSettlement.totalEarned)}</h3>
+        </article>
+        <article className="card metric-card">
+          <p>Owner Earned Money (Month)</p>
+          <h3>INR {formatMoney(ownerSettlement.totalEarned)}</h3>
+        </article>
+        <article className="card metric-card">
+          <p>Owner Paid</p>
+          <h3>INR {formatMoney(ownerSettlement.totalPaid)}</h3>
+        </article>
+        <article className="card metric-card">
+          <p>Owner To Be Paid</p>
+          <h3>INR {formatMoney(ownerSettlement.pendingBalance)}</h3>
         </article>
       </div>
 
@@ -341,13 +518,17 @@ export default function OwnerExpenditurePage() {
               <th>Today Commission</th>
               <th>Month Hours</th>
               <th>Month Commission</th>
+              <th>Earned Money</th>
+              <th>Paid</th>
+              <th>To Be Paid</th>
+              <th>Last Payment</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {!ownerRows.length ? (
               <tr>
-                <td data-label="Status" colSpan={8}>No owners found.</td>
+                <td data-label="Status" colSpan={12}>No owners found.</td>
               </tr>
             ) : null}
             {ownerRows.map((owner) => (
@@ -363,6 +544,10 @@ export default function OwnerExpenditurePage() {
                 <td data-label="Today Commission">INR {formatMoney(owner.todayCommission)}</td>
                 <td data-label="Month Hours">{formatHours(owner.monthHours)}</td>
                 <td data-label="Month Commission">INR {formatMoney(owner.monthCommission)}</td>
+                <td data-label="Earned Money">INR {formatMoney(owner.earnedMoney)}</td>
+                <td data-label="Paid">INR {formatMoney(owner.paidMoney)}</td>
+                <td data-label="To Be Paid">INR {formatMoney(owner.toBePaidMoney)}</td>
+                <td data-label="Last Payment">{humanDate(owner.lastPaymentDate)}</td>
                 <td data-label="Actions">
                   <div className="action-row">
                     <button
@@ -393,6 +578,12 @@ export default function OwnerExpenditurePage() {
                       }}
                     >
                       Edit Daily Hours
+                    </button>
+                    <button className="button small ghost" type="button" onClick={() => openOwnerPaymentHistory(owner)}>
+                      View Payments
+                    </button>
+                    <button className="button small" type="button" onClick={() => openRecordOwnerPayment(owner)}>
+                      Record Payment
                     </button>
                     <button className="button small danger" type="button" onClick={() => removeOwner(owner)}>
                       Delete
@@ -503,6 +694,162 @@ export default function OwnerExpenditurePage() {
             Save Daily Hours
           </button>
         </form>
+      </Modal>
+
+      <Modal
+        title={recordOwnerPayment ? `Record Payment - ${recordOwnerPayment.name}` : "Record Owner Payment"}
+        open={Boolean(recordOwnerPayment)}
+        onClose={() => setRecordOwnerPayment(null)}
+      >
+        {recordOwnerPayment ? (
+          <form className="inline-form payment-form-grid" onSubmit={saveOwnerPayment}>
+            <input value={recordOwnerPayment.name} disabled />
+            <input value={recordOwnerPayment.businessType} disabled />
+            <input
+              type="date"
+              value={recordOwnerPaymentForm.periodStart}
+              onChange={(e) => setRecordOwnerPaymentForm((p) => ({ ...p, periodStart: e.target.value }))}
+              required
+            />
+            <input
+              type="date"
+              value={recordOwnerPaymentForm.periodEnd}
+              onChange={(e) => setRecordOwnerPaymentForm((p) => ({ ...p, periodEnd: e.target.value }))}
+              required
+            />
+            <input value={`Computed Earned: INR ${formatMoney(recordOwnerPayment.earnedMoney)}`} disabled />
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={recordOwnerPaymentForm.paidAmount}
+              onChange={(e) => setRecordOwnerPaymentForm((p) => ({ ...p, paidAmount: e.target.value }))}
+              required
+            />
+            <select
+              value={recordOwnerPaymentForm.method}
+              onChange={(e) => setRecordOwnerPaymentForm((p) => ({ ...p, method: e.target.value }))}
+            >
+              <option value="cash">cash</option>
+              <option value="bank">bank</option>
+              <option value="upi">upi</option>
+            </select>
+            <input
+              placeholder="Reference ID"
+              value={recordOwnerPaymentForm.referenceId}
+              onChange={(e) => setRecordOwnerPaymentForm((p) => ({ ...p, referenceId: e.target.value }))}
+            />
+            <input
+              placeholder="Notes"
+              value={recordOwnerPaymentForm.notes}
+              onChange={(e) => setRecordOwnerPaymentForm((p) => ({ ...p, notes: e.target.value }))}
+            />
+            <button className="button" type="submit">
+              Confirm Payment
+            </button>
+          </form>
+        ) : null}
+      </Modal>
+
+      <Modal
+        title={historyOwner ? `Owner Payments - ${historyOwner.name}` : "Owner Payments"}
+        open={Boolean(historyOwner)}
+        onClose={() => setHistoryOwner(null)}
+      >
+        <div className="card table-wrap">
+          <table className="responsive-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Period Covered</th>
+                <th>Amount Paid</th>
+                <th>Method</th>
+                <th>Reference</th>
+                <th>Status</th>
+                <th>Notes</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!ownerPaymentHistoryRows.length ? (
+                <tr>
+                  <td data-label="Status" colSpan={8}>No owner payment history.</td>
+                </tr>
+              ) : null}
+              {ownerPaymentHistoryRows.map((row) => (
+                <tr key={row.id}>
+                  <td data-label="Date">{humanDate(row.paidAt || row.createdAt)}</td>
+                  <td data-label="Period Covered">
+                    {humanDate(row.periodStart)} - {humanDate(row.periodEnd)}
+                  </td>
+                  <td data-label="Amount Paid">INR {formatMoney(row.paidAmount)}</td>
+                  <td data-label="Method">{row.method || "-"}</td>
+                  <td data-label="Reference">{row.referenceId || "-"}</td>
+                  <td data-label="Status">{row.status}</td>
+                  <td data-label="Notes">{row.notes || "-"}</td>
+                  <td data-label="Actions">
+                    <div className="action-row">
+                      <button className="button small ghost" type="button" onClick={() => openEditOwnerPayment(row)}>
+                        Edit
+                      </button>
+                      <button className="button small danger" type="button" onClick={() => removeOwnerPayment(row)}>
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Modal>
+
+      <Modal
+        title="Edit Owner Payment"
+        open={Boolean(editOwnerPayment)}
+        onClose={() => setEditOwnerPayment(null)}
+      >
+        {editOwnerPayment ? (
+          <form className="inline-form payment-form-grid" onSubmit={saveEditedOwnerPayment}>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={editOwnerPaymentForm.paidAmount}
+              onChange={(e) => setEditOwnerPaymentForm((p) => ({ ...p, paidAmount: e.target.value }))}
+              required
+            />
+            <select
+              value={editOwnerPaymentForm.status}
+              onChange={(e) => setEditOwnerPaymentForm((p) => ({ ...p, status: e.target.value }))}
+            >
+              <option value="pending">pending</option>
+              <option value="partial">partial</option>
+              <option value="paid">paid</option>
+            </select>
+            <select
+              value={editOwnerPaymentForm.method}
+              onChange={(e) => setEditOwnerPaymentForm((p) => ({ ...p, method: e.target.value }))}
+            >
+              <option value="cash">cash</option>
+              <option value="bank">bank</option>
+              <option value="upi">upi</option>
+            </select>
+            <input
+              placeholder="Reference ID"
+              value={editOwnerPaymentForm.referenceId}
+              onChange={(e) => setEditOwnerPaymentForm((p) => ({ ...p, referenceId: e.target.value }))}
+            />
+            <input
+              placeholder="Notes"
+              value={editOwnerPaymentForm.notes}
+              onChange={(e) => setEditOwnerPaymentForm((p) => ({ ...p, notes: e.target.value }))}
+            />
+            <button className="button" type="submit">
+              Save Payment
+            </button>
+          </form>
+        ) : null}
       </Modal>
 
       <Modal

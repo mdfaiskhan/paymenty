@@ -44,3 +44,38 @@ export async function upsertOwnerDailyHoursApi(id, payload) {
   const { data } = await apiClient.post(`/api/owners/${id}/daily-hours`, payload, { headers: ownerHeaders() });
   return data;
 }
+
+export async function getOwnerPaymentsSummaryApi(params = {}) {
+  const { data } = await apiClient.get("/api/payments/summary", {
+    params: { businessType: "owners", ...params },
+    headers: ownerHeaders()
+  });
+  return data;
+}
+
+export async function getOwnerPaymentsApi(params = {}) {
+  const { data } = await apiClient.get("/api/payments", {
+    params: { businessType: "owners", ...params },
+    headers: ownerHeaders()
+  });
+  return data;
+}
+
+export async function createOwnerPaymentApi(payload) {
+  const { data } = await apiClient.post(
+    "/api/payments",
+    { ...payload, businessType: "owners" },
+    { headers: ownerHeaders() }
+  );
+  return data;
+}
+
+export async function updateOwnerPaymentApi(id, payload) {
+  const { data } = await apiClient.put(`/api/payments/${id}`, payload, { headers: ownerHeaders() });
+  return data;
+}
+
+export async function deleteOwnerPaymentApi(id) {
+  const { data } = await apiClient.delete(`/api/payments/${id}`, { headers: ownerHeaders() });
+  return data;
+}

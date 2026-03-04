@@ -39,6 +39,9 @@ export default function AppLayout() {
           <NavLink to="/owners" onClick={() => setMobileNavOpen(false)}>
             Owner Expenditure
           </NavLink>
+          <NavLink to="/payments" onClick={() => setMobileNavOpen(false)}>
+            Payments
+          </NavLink>
         </nav>
         <div className="sidebar-footer">
           <p>{admin?.email}</p>

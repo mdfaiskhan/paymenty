@@ -3,6 +3,7 @@ import LoginPage from "./pages/LoginPage";
 import BusinessSelectionPage from "./pages/BusinessSelectionPage";
 import BusinessDashboardPage from "./pages/BusinessDashboardPage";
 import OwnerExpenditurePage from "./pages/OwnerExpenditurePage";
+import PaymentsPage from "./pages/PaymentsPage";
 import { useAuth } from "./context/AuthContext";
 import AppLayout from "./layout/AppLayout";
 
@@ -29,6 +30,7 @@ export default function App() {
         <Route index element={<BusinessSelectionPage />} />
         <Route path="/business/:businessType" element={<BusinessDashboardPage />} />
         <Route path="/owners" element={<OwnerExpenditurePage />} />
+        <Route path="/payments" element={<PaymentsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

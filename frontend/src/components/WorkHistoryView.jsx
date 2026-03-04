@@ -6,14 +6,16 @@ import DurationPicker, { formatHoursAndMinutes } from "./DurationPicker";
 export default function WorkHistoryView({ businessType, days, onEditEntry, onDeleteEntry }) {
   const [editing, setEditing] = useState(null);
   const [editDurationHours, setEditDurationHours] = useState(0);
+  const [editDate, setEditDate] = useState("");
   const [videoId, setVideoId] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
 
-  function beginEdit(entry) {
+  function beginEdit(entry, dayDate) {
     setError("");
     setEditing(entry.id);
     setEditDurationHours(Number(entry.hours) || 0);
+    setEditDate(String(dayDate).slice(0, 10));
     setVideoId(entry.videoId || "");
     setNote(entry.note || "");
   }
@@ -23,7 +25,11 @@ export default function WorkHistoryView({ businessType, days, onEditEntry, onDel
       setError("Total time must be greater than 0 and up to 24 hours");
       return;
     }
-    await onEditEntry(entryId, { hours: editDurationHours, videoId, note });
+    if (!editDate) {
+      setError("Date is required");
+      return;
+    }
+    await onEditEntry(entryId, { workDate: editDate, hours: editDurationHours, videoId, note });
     setEditing(null);
   }
 
@@ -58,6 +64,11 @@ export default function WorkHistoryView({ businessType, days, onEditEntry, onDel
                             onChange={setEditDurationHours}
                             label="Edit Time"
                           />
+                          <input
+                            type="date"
+                            value={editDate}
+                            onChange={(e) => setEditDate(e.target.value)}
+                          />
                           <input value={videoId} placeholder="Video ID" onChange={(e) => setVideoId(e.target.value)} />
                           <input value={note} onChange={(e) => setNote(e.target.value)} />
                           <button className="button small" onClick={() => saveEdit(entry.id)} type="button">
@@ -72,7 +83,11 @@ export default function WorkHistoryView({ businessType, days, onEditEntry, onDel
                           <span>{formatHoursAndMinutes(entry.hours)}</span>
                           <span>Video: {entry.videoId || "-"}</span>
                           <span>{entry.note || "-"}</span>
-                          <button className="button small ghost" onClick={() => beginEdit(entry)} type="button">
+                          <button
+                            className="button small ghost"
+                            onClick={() => beginEdit(entry, day.date)}
+                            type="button"
+                          >
                             Edit
                           </button>
                           <button

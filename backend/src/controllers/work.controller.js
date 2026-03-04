@@ -37,9 +37,19 @@ async function createWorkEntry(req, res, next) {
 async function updateWorkEntry(req, res, next) {
   try {
     const { id } = req.validated.params;
+    const payload = { ...req.validated.body };
+
+    if (payload.workDate) {
+      const normalizedDate = parseYyyyMmDd(payload.workDate);
+      if (!normalizedDate) {
+        throw new ApiError(400, "Invalid workDate");
+      }
+      payload.workDate = normalizedDate;
+    }
+
     const row = await WorkEntry.findOneAndUpdate(
       { _id: id, isDeleted: false },
-      { ...req.validated.body, updatedBy: req.user.id },
+      { ...payload, updatedBy: req.user.id },
       { new: true }
     );
 

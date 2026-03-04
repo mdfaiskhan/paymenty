@@ -1,13 +1,85 @@
 const Employee = require("../models/Employee.model");
+const Owner = require("../models/Owner.model");
+const OwnerDailyHours = require("../models/OwnerDailyHours.model");
+const OwnerCommissionRule = require("../models/OwnerCommissionRule.model");
 const WorkEntry = require("../models/WorkEntry.model");
 const PaymentLog = require("../models/PaymentLog.model");
-const { monthBounds } = require("../utils/date");
+const ApiError = require("../utils/ApiError");
+const { parseYyyyMmDd } = require("../utils/date");
 const {
   tailorEarningsExpressionWithRule,
   butcherCutsExpressionWithRule
 } = require("./payout.service");
 
-function ruleLookupStages(businessType) {
+function utcStartOfDay(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function utcEndOfDay(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999));
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function dateKey(date) {
+  return new Date(date).toISOString().slice(0, 10);
+}
+
+function rangeBounds({ rangeType = "month", startDate, endDate } = {}) {
+  const nowUtc = new Date();
+  const todayStart = utcStartOfDay(nowUtc);
+  const todayEnd = utcEndOfDay(nowUtc);
+
+  if (rangeType === "today") {
+    return { start: todayStart, end: todayEnd };
+  }
+
+  if (rangeType === "week") {
+    const utcDay = nowUtc.getUTCDay();
+    const diffToMonday = (utcDay + 6) % 7;
+    const weekStart = new Date(
+      Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - diffToMonday)
+    );
+    return { start: weekStart, end: utcEndOfDay(addDays(weekStart, 6)) };
+  }
+
+  if (rangeType === "custom") {
+    const parsedStart = parseYyyyMmDd(startDate);
+    const parsedEnd = parseYyyyMmDd(endDate);
+    if (!parsedStart || !parsedEnd) {
+      throw new ApiError(400, "startDate and endDate are required for custom range");
+    }
+    const boundedEnd = utcEndOfDay(parsedEnd);
+    if (parsedStart > boundedEnd) {
+      throw new ApiError(400, "startDate cannot be after endDate");
+    }
+    return { start: parsedStart, end: boundedEnd };
+  }
+
+  const monthStart = new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), 1));
+  const monthEnd = new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+  return { start: monthStart, end: monthEnd };
+}
+
+function paymentMatchForRange(start, end, businessType = "all") {
+  const match = {
+    periodStart: { $lte: end },
+    periodEnd: { $gte: start }
+  };
+
+  if (businessType === "all") {
+    match.businessType = { $in: ["tailor", "butcher"] };
+  } else if (businessType) {
+    match.businessType = businessType;
+  }
+  return match;
+}
+
+function ruleLookupStages(businessTypeExpr) {
   return [
     {
       $lookup: {
@@ -15,7 +87,7 @@ function ruleLookupStages(businessType) {
         let: {
           employeeId: "$_id.employeeId",
           workDate: "$_id.workDate",
-          businessType
+          businessType: businessTypeExpr
         },
         pipeline: [
           {
@@ -57,10 +129,8 @@ function ruleLookupStages(businessType) {
   ];
 }
 
-async function getReconciliation(businessType, month) {
-  const { start, end } = monthBounds(month);
-
-  const derivedRows = await WorkEntry.aggregate([
+async function getEmployeeDerivedByBusiness(businessType, start, end) {
+  const rows = await WorkEntry.aggregate([
     {
       $match: {
         businessType,
@@ -86,61 +156,256 @@ async function getReconciliation(businessType, month) {
     {
       $group: {
         _id: "$_id.employeeId",
-        derivedAmount: { $sum: "$dayMetric" }
+        hoursWorked: { $sum: "$dayHours" },
+        computedAmount: { $sum: "$dayMetric" }
       }
     }
   ]);
 
-  const paidRows = await PaymentLog.aggregate([
+  return new Map(
+    rows.map((row) => [
+      String(row._id),
+      { hoursWorked: Number(row.hoursWorked) || 0, computedAmount: Number(row.computedAmount) || 0 }
+    ])
+  );
+}
+
+async function getDailyEarnedByBusiness(businessType, start, end) {
+  const rows = await WorkEntry.aggregate([
     {
       $match: {
         businessType,
-        periodStart: { $lte: end },
-        periodEnd: { $gte: start }
+        isDeleted: false,
+        workDate: { $gte: start, $lte: end }
       }
     },
     {
       $group: {
-        _id: "$employeeId",
-        totalPaid: {
-          $sum: {
-            $cond: [{ $in: ["$status", ["partial", "paid"]] }, "$paidAmount", 0]
-          }
-        },
-        lastPaidAt: { $max: "$paidAt" }
+        _id: { employeeId: "$employeeId", workDate: "$workDate" },
+        dayHours: { $sum: "$hours" }
+      }
+    },
+    ...ruleLookupStages(businessType),
+    {
+      $addFields: {
+        dayMetric:
+          businessType === "tailor"
+            ? tailorEarningsExpressionWithRule("$dayHours", "$chosenRule")
+            : butcherCutsExpressionWithRule("$dayHours", "$chosenRule")
+      }
+    },
+    {
+      $group: {
+        _id: "$_id.workDate",
+        totalEarned: { $sum: "$dayMetric" }
+      }
+    },
+    {
+      $project: {
+        _id: 0,
+        date: { $dateToString: { format: "%Y-%m-%d", date: "$_id" } },
+        totalEarned: 1
       }
     }
   ]);
 
-  const derivedMap = new Map(derivedRows.map((r) => [String(r._id), r.derivedAmount || 0]));
-  const paidMap = new Map(
-    paidRows.map((r) => [String(r._id), { totalPaid: r.totalPaid || 0, lastPaidAt: r.lastPaidAt || null }])
-  );
+  return rows;
+}
 
-  const employees = await Employee.find({ businessType, isActive: true }).lean();
+async function getEarnedTrend({ businessType = "all", start, end }) {
+  const rows =
+    businessType === "all"
+      ? [
+          ...(await getDailyEarnedByBusiness("tailor", start, end)),
+          ...(await getDailyEarnedByBusiness("butcher", start, end))
+        ]
+      : await getDailyEarnedByBusiness(businessType, start, end);
 
-  return employees.map((emp) => {
-    const derivedAmount = derivedMap.get(String(emp._id)) || 0;
-    const paid = paidMap.get(String(emp._id)) || { totalPaid: 0, lastPaidAt: null };
-    const outstanding = derivedAmount - paid.totalPaid;
-
-    let reconStatus = "unpaid";
-    if (derivedAmount > 0 && outstanding <= 0) {
-      reconStatus = "settled";
-    } else if (paid.totalPaid > 0 && outstanding > 0) {
-      reconStatus = "partial";
-    }
-
-    return {
-      employeeId: emp._id,
-      name: emp.name,
-      derivedAmount,
-      totalPaid: paid.totalPaid,
-      outstanding,
-      reconStatus,
-      lastPaidAt: paid.lastPaidAt
-    };
+  const byDate = new Map();
+  rows.forEach((row) => {
+    const key = row.date;
+    byDate.set(key, (byDate.get(key) || 0) + (Number(row.totalEarned) || 0));
   });
+
+  const trend = [];
+  const startDay = utcStartOfDay(start);
+  const endDay = utcStartOfDay(end);
+  for (let d = new Date(startDay); d <= endDay; d = addDays(d, 1)) {
+    const key = dateKey(d);
+    trend.push({
+      date: key,
+      totalEarned: byDate.get(key) || 0
+    });
+  }
+  return trend;
+}
+
+function commissionForDate(rules, date) {
+  for (const rule of rules) {
+    const fromOk = rule.effectiveFrom <= date;
+    const toOk = !rule.effectiveTo || rule.effectiveTo >= date;
+    if (fromOk && toOk) {
+      return Number(rule.commissionPerHour) || 0;
+    }
+  }
+  return 0;
+}
+
+async function getOwnerDerivedMap(start, end) {
+  const owners = await Owner.find({ isActive: true }).lean();
+  if (!owners.length) {
+    return new Map();
+  }
+
+  const ownerIds = owners.map((owner) => owner._id);
+  const [hoursRows, rules] = await Promise.all([
+    OwnerDailyHours.find({
+      ownerId: { $in: ownerIds },
+      workDate: { $gte: start, $lte: end }
+    }).lean(),
+    OwnerCommissionRule.find({
+      ownerId: { $in: ownerIds },
+      effectiveFrom: { $lte: end },
+      $or: [{ effectiveTo: null }, { effectiveTo: { $gte: start } }]
+    })
+      .sort({ effectiveFrom: -1 })
+      .lean()
+  ]);
+
+  const rulesByOwner = new Map();
+  rules.forEach((rule) => {
+    const key = String(rule.ownerId);
+    if (!rulesByOwner.has(key)) {
+      rulesByOwner.set(key, []);
+    }
+    rulesByOwner.get(key).push(rule);
+  });
+
+  const totals = new Map();
+  hoursRows.forEach((row) => {
+    const ownerKey = String(row.ownerId);
+    const day = utcStartOfDay(new Date(row.workDate));
+    const rate = commissionForDate(rulesByOwner.get(ownerKey) || [], day);
+    const existing = totals.get(ownerKey) || { hoursWorked: 0, computedAmount: 0 };
+    const hours = Number(row.hours) || 0;
+    existing.hoursWorked += hours;
+    existing.computedAmount += hours * rate;
+    totals.set(ownerKey, existing);
+  });
+
+  return totals;
+}
+
+async function getEntityDerivedMap({ businessType = "all", start, end }) {
+  const result = new Map();
+
+  if (businessType === "all" || businessType === "tailor") {
+    const rows = await getEmployeeDerivedByBusiness("tailor", start, end);
+    rows.forEach((value, key) => {
+      result.set(`employee:${key}`, {
+        entityType: "employee",
+        businessType: "tailor",
+        ...value
+      });
+    });
+  }
+
+  if (businessType === "all" || businessType === "butcher") {
+    const rows = await getEmployeeDerivedByBusiness("butcher", start, end);
+    rows.forEach((value, key) => {
+      result.set(`employee:${key}`, {
+        entityType: "employee",
+        businessType: "butcher",
+        ...value
+      });
+    });
+  }
+
+  if (businessType === "owners") {
+    const ownerMap = await getOwnerDerivedMap(start, end);
+    ownerMap.forEach((value, key) => {
+      result.set(`owner:${key}`, {
+        entityType: "owner",
+        businessType: "owners",
+        hoursWorked: value.hoursWorked || 0,
+        computedAmount: value.computedAmount || 0
+      });
+    });
+  }
+
+  return result;
+}
+
+async function getPaidAggregation({ businessType = "all", start, end }) {
+  const rows = await PaymentLog.aggregate([
+    {
+      $match: paymentMatchForRange(start, end, businessType)
+    },
+    {
+      $group: {
+        _id: {
+          entityType: {
+            $cond: [{ $eq: ["$businessType", "owners"] }, "owner", "employee"]
+          },
+          entityId: { $ifNull: ["$ownerId", "$employeeId"] }
+        },
+        totalPaid: { $sum: "$paidAmount" },
+        lastPaymentDate: { $max: "$paidAt" }
+      }
+    }
+  ]);
+
+  return new Map(
+    rows.map((row) => [
+      `${row._id.entityType}:${String(row._id.entityId)}`,
+      {
+        totalPaid: Number(row.totalPaid) || 0,
+        lastPaymentDate: row.lastPaymentDate || null
+      }
+    ])
+  );
+}
+
+async function getEntityNameMaps() {
+  const [employees, owners] = await Promise.all([
+    Employee.find({ isActive: true }).lean(),
+    Owner.find({ isActive: true }).lean()
+  ]);
+
+  return {
+    employeeMap: new Map(employees.map((row) => [String(row._id), row])),
+    ownerMap: new Map(owners.map((row) => [String(row._id), row]))
+  };
+}
+
+function safeStatus(computedAmount, paidAmount) {
+  if (paidAmount <= 0) {
+    return "pending";
+  }
+  if (paidAmount >= computedAmount) {
+    return "paid";
+  }
+  return "partial";
+}
+
+function parsePaymentDoc(payment) {
+  return {
+    id: payment._id,
+    employeeId: payment.employeeId,
+    ownerId: payment.ownerId,
+    businessType: payment.businessType,
+    periodStart: payment.periodStart,
+    periodEnd: payment.periodEnd,
+    hoursWorked: Number(payment.hoursWorked) || 0,
+    computedAmount: Number(payment.computedAmount) || 0,
+    paidAmount: Number(payment.paidAmount) || 0,
+    status: payment.status,
+    method: payment.method,
+    referenceId: payment.referenceId || "",
+    notes: payment.notes || "",
+    paidAt: payment.paidAt,
+    createdAt: payment.createdAt
+  };
 }
 
 async function getDerivedAmountForEmployeePeriod(employeeId, businessType, periodStart, periodEnd) {
@@ -171,15 +436,310 @@ async function getDerivedAmountForEmployeePeriod(employeeId, businessType, perio
     {
       $group: {
         _id: null,
+        totalHours: { $sum: "$dayHours" },
         total: { $sum: "$dayMetric" }
       }
     }
   ]);
 
-  return rows[0]?.total || 0;
+  return {
+    hoursWorked: rows[0]?.totalHours || 0,
+    computedAmount: rows[0]?.total || 0
+  };
+}
+
+async function getDerivedAmountForOwnerPeriod(ownerId, periodStart, periodEnd) {
+  const owner = await Owner.findOne({ _id: ownerId, isActive: true }).lean();
+  if (!owner) {
+    throw new ApiError(404, "Owner not found or inactive");
+  }
+
+  const [hoursRows, rules] = await Promise.all([
+    OwnerDailyHours.find({ ownerId, workDate: { $gte: periodStart, $lte: periodEnd } }).lean(),
+    OwnerCommissionRule.find({
+      ownerId,
+      effectiveFrom: { $lte: periodEnd },
+      $or: [{ effectiveTo: null }, { effectiveTo: { $gte: periodStart } }]
+    })
+      .sort({ effectiveFrom: -1 })
+      .lean()
+  ]);
+
+  return hoursRows.reduce(
+    (acc, row) => {
+      const day = utcStartOfDay(new Date(row.workDate));
+      const rate = commissionForDate(rules, day);
+      const hours = Number(row.hours) || 0;
+      acc.hoursWorked += hours;
+      acc.computedAmount += hours * rate;
+      return acc;
+    },
+    { hoursWorked: 0, computedAmount: 0 }
+  );
+}
+
+async function createPaymentLog(payload, adminId) {
+  const periodStart = parseYyyyMmDd(payload.periodStart);
+  const parsedPeriodEnd = parseYyyyMmDd(payload.periodEnd);
+  if (!periodStart || !parsedPeriodEnd) {
+    throw new ApiError(400, "Invalid period date");
+  }
+  const periodEnd = utcEndOfDay(parsedPeriodEnd);
+
+  if (periodStart > periodEnd) {
+    throw new ApiError(400, "periodStart cannot be after periodEnd");
+  }
+
+  let computed = { hoursWorked: 0, computedAmount: 0 };
+  if (payload.businessType === "owners") {
+    if (!payload.ownerId || payload.employeeId) {
+      throw new ApiError(400, "Owners payments require ownerId only");
+    }
+    computed = await getDerivedAmountForOwnerPeriod(payload.ownerId, periodStart, periodEnd);
+  } else {
+    if (!payload.employeeId || payload.ownerId) {
+      throw new ApiError(400, "Employee payments require employeeId only");
+    }
+    const employee = await Employee.findOne({ _id: payload.employeeId, isActive: true }).lean();
+    if (!employee) {
+      throw new ApiError(404, "Employee not found or inactive");
+    }
+    if (employee.businessType !== payload.businessType) {
+      throw new ApiError(400, "businessType does not match employee business type");
+    }
+    computed = await getDerivedAmountForEmployeePeriod(
+      employee._id,
+      payload.businessType,
+      periodStart,
+      periodEnd
+    );
+  }
+
+  const paidAmount = Number(payload.paidAmount) || 0;
+  const status = payload.status || safeStatus(computed.computedAmount, paidAmount);
+  const paidAt = status === "pending" ? null : new Date();
+
+  const created = await PaymentLog.create({
+    employeeId: payload.employeeId || null,
+    ownerId: payload.ownerId || null,
+    businessType: payload.businessType,
+    periodStart,
+    periodEnd,
+    hoursWorked: computed.hoursWorked,
+    computedAmount: computed.computedAmount,
+    paidAmount,
+    status,
+    method: payload.method || "cash",
+    referenceId: payload.referenceId || "",
+    notes: payload.notes || "",
+    createdBy: adminId,
+    paidAt
+  });
+
+  return parsePaymentDoc(created.toObject ? created.toObject() : created);
+}
+
+async function updatePaymentLog(paymentId, payload) {
+  const payment = await PaymentLog.findById(paymentId);
+  if (!payment) {
+    throw new ApiError(404, "Payment not found");
+  }
+
+  if (typeof payload.paidAmount !== "undefined") {
+    payment.paidAmount = payload.paidAmount;
+  }
+  if (typeof payload.method !== "undefined") {
+    payment.method = payload.method;
+  }
+  if (typeof payload.referenceId !== "undefined") {
+    payment.referenceId = payload.referenceId;
+  }
+  if (typeof payload.notes !== "undefined") {
+    payment.notes = payload.notes;
+  }
+
+  if (typeof payload.status !== "undefined") {
+    payment.status = payload.status;
+  } else {
+    payment.status = safeStatus(payment.computedAmount, payment.paidAmount);
+  }
+
+  payment.paidAt = payment.status === "pending" ? null : new Date();
+  await payment.save();
+  return parsePaymentDoc(payment.toObject());
+}
+
+async function getPaymentById(paymentId) {
+  const payment = await PaymentLog.findById(paymentId).lean();
+  if (!payment) {
+    throw new ApiError(404, "Payment not found");
+  }
+  return parsePaymentDoc(payment);
+}
+
+async function deletePaymentById(paymentId) {
+  const payment = await PaymentLog.findByIdAndDelete(paymentId).lean();
+  if (!payment) {
+    throw new ApiError(404, "Payment not found");
+  }
+  return { message: "Payment deleted" };
+}
+
+function matchBySearch(rows, search) {
+  const q = String(search || "")
+    .trim()
+    .toLowerCase();
+  if (!q) {
+    return rows;
+  }
+  return rows.filter((row) => row.name.toLowerCase().includes(q));
+}
+
+async function listPaymentsWithBalances({ businessType = "all", rangeType, startDate, endDate, search }) {
+  const { start, end } = rangeBounds({ rangeType, startDate, endDate });
+  const [derivedMap, paidMap, names] = await Promise.all([
+    getEntityDerivedMap({ businessType, start, end }),
+    getPaidAggregation({ businessType, start, end }),
+    getEntityNameMaps()
+  ]);
+
+  const allKeys = new Set([...derivedMap.keys(), ...paidMap.keys()]);
+  if (businessType === "all" || businessType === "tailor" || businessType === "butcher") {
+    names.employeeMap.forEach((value, key) => {
+      if (businessType === "all" || value.businessType === businessType) {
+        allKeys.add(`employee:${key}`);
+      }
+    });
+  }
+  if (businessType === "owners") {
+    names.ownerMap.forEach((_, key) => {
+      allKeys.add(`owner:${key}`);
+    });
+  }
+  const rows = [];
+
+  allKeys.forEach((key) => {
+    const derived = derivedMap.get(key) || { hoursWorked: 0, computedAmount: 0 };
+    const paid = paidMap.get(key) || { totalPaid: 0, lastPaymentDate: null };
+    const [entityType, entityId] = key.split(":");
+    const name =
+      entityType === "owner"
+        ? names.ownerMap.get(entityId)?.name || "Unknown Owner"
+        : names.employeeMap.get(entityId)?.name || "Unknown Employee";
+
+    const rowBusinessType =
+      derived.businessType ||
+      (entityType === "owner" ? "owners" : names.employeeMap.get(entityId)?.businessType || "tailor");
+    const totalEarned = Number(derived.computedAmount) || 0;
+    const totalPaid = Number(paid.totalPaid) || 0;
+    const pendingBalance = totalEarned - totalPaid;
+
+    rows.push({
+      id: key,
+      entityType,
+      employeeId: entityType === "employee" ? entityId : null,
+      ownerId: entityType === "owner" ? entityId : null,
+      name,
+      businessType: rowBusinessType,
+      hoursWorked: Number(derived.hoursWorked) || 0,
+      totalEarned,
+      totalPaid,
+      pendingBalance,
+      lastPaymentDate: paid.lastPaymentDate
+    });
+  });
+
+  const filtered = matchBySearch(rows, search).sort((a, b) => b.pendingBalance - a.pendingBalance);
+
+  return {
+    filters: { businessType, rangeType: rangeType || "month", startDate, endDate },
+    rows: filtered
+  };
+}
+
+async function getPaymentHistory({ employeeId, ownerId, businessType, rangeType, startDate, endDate }) {
+  const { start, end } = rangeBounds({ rangeType, startDate, endDate });
+  const match = paymentMatchForRange(start, end, businessType || "all");
+  if (employeeId) {
+    match.employeeId = employeeId;
+  }
+  if (ownerId) {
+    match.ownerId = ownerId;
+  }
+
+  const rows = await PaymentLog.find(match).sort({ createdAt: -1 }).lean();
+  return rows.map((row) => parsePaymentDoc(row));
+}
+
+async function getPaidTrendLast7Days({ businessType = "all" }) {
+  const todayEnd = utcEndOfDay(new Date());
+  const trendStart = utcStartOfDay(addDays(todayEnd, -6));
+  const match = {
+    paidAt: { $gte: trendStart, $lte: todayEnd }
+  };
+  if (businessType === "all") {
+    match.businessType = { $in: ["tailor", "butcher"] };
+  } else {
+    match.businessType = businessType;
+  }
+
+  const rows = await PaymentLog.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: {
+          $dateToString: { format: "%Y-%m-%d", date: "$paidAt" }
+        },
+        amountPaid: { $sum: "$paidAmount" }
+      }
+    }
+  ]);
+
+  const map = new Map(rows.map((row) => [row._id, Number(row.amountPaid) || 0]));
+  const trend = [];
+  for (let i = 0; i < 7; i += 1) {
+    const d = addDays(trendStart, i);
+    const dk = dateKey(d);
+    trend.push({ date: dk, amountPaid: map.get(dk) || 0 });
+  }
+  return trend;
+}
+
+async function getSummary({ businessType = "all", rangeType, startDate, endDate }) {
+  const { start, end } = rangeBounds({ rangeType, startDate, endDate });
+  const [derivedMap, paidMap, trend, earnedTrend] = await Promise.all([
+    getEntityDerivedMap({ businessType, start, end }),
+    getPaidAggregation({ businessType, start, end }),
+    getPaidTrendLast7Days({ businessType }),
+    getEarnedTrend({ businessType, start, end })
+  ]);
+
+  let totalEarned = 0;
+  derivedMap.forEach((row) => {
+    totalEarned += Number(row.computedAmount) || 0;
+  });
+
+  let totalPaid = 0;
+  paidMap.forEach((row) => {
+    totalPaid += Number(row.totalPaid) || 0;
+  });
+
+  return {
+    filters: { businessType, rangeType: rangeType || "month", startDate, endDate },
+    totalEarned,
+    totalPaid,
+    pendingBalance: totalEarned - totalPaid,
+    trend,
+    earnedTrend
+  };
 }
 
 module.exports = {
-  getReconciliation,
-  getDerivedAmountForEmployeePeriod
+  createPaymentLog,
+  updatePaymentLog,
+  getPaymentById,
+  deletePaymentById,
+  listPaymentsWithBalances,
+  getPaymentHistory,
+  getSummary
 };
