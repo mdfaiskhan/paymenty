@@ -5,11 +5,15 @@ const LOCAL_API_URL = "http://localhost:5000";
 const RENDER_API_URL = "https://paymenty-backend.onrender.com";
 
 function resolveApiBaseUrl() {
+  // Highest priority: explicit environment variable
   const envUrl = String(import.meta.env.VITE_API_BASE_URL || "").trim();
   if (envUrl) {
     return envUrl;
   }
 
+  // Safe fallback mode:
+  // - local frontend => local backend
+  // - deployed frontend => Render backend
   if (typeof window !== "undefined") {
     const host = window.location.hostname;
     const isLocalhost = host === "localhost" || host === "127.0.0.1";
