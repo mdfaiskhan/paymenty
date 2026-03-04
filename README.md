@@ -18,6 +18,10 @@ Full-stack contributor payment engine for Tailor and Butcher businesses.
 
 ## Frontend setup
 1. Copy `frontend/.env.example` to `frontend/.env`.
+2. Set `VITE_API_BASE_URL` if needed:
+   - Local dev: `http://localhost:5000`
+   - Production: `https://paymenty-backend.onrender.com`
+   - If omitted, frontend auto-uses localhost on local hostname and Render backend on deployed hostname.
 2. Install deps:
    - `cd frontend`
    - `npm install`

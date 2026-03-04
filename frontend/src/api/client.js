@@ -1,9 +1,26 @@
 import axios from "axios";
 
 const TOKEN_KEY = "paymenty_token";
+const LOCAL_API_URL = "http://localhost:5000";
+const RENDER_API_URL = "https://paymenty-backend.onrender.com";
+
+function resolveApiBaseUrl() {
+  const envUrl = String(import.meta.env.VITE_API_BASE_URL || "").trim();
+  if (envUrl) {
+    return envUrl;
+  }
+
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    const isLocalhost = host === "localhost" || host === "127.0.0.1";
+    return isLocalhost ? LOCAL_API_URL : RENDER_API_URL;
+  }
+
+  return LOCAL_API_URL;
+}
 
 const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:5000",
+  baseURL: resolveApiBaseUrl(),
   timeout: 15000
 });
 
