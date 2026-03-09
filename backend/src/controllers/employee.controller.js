@@ -1,9 +1,11 @@
 const Employee = require("../models/Employee.model");
 const ApiError = require("../utils/ApiError");
+const { invalidateBusinessAnalyticsCache } = require("../services/analytics.service");
 
 async function createEmployee(req, res, next) {
   try {
     const employee = await Employee.create(req.validated.body);
+    invalidateBusinessAnalyticsCache(employee.businessType);
     return res.status(201).json(employee);
   } catch (error) {
     return next(error);
@@ -36,6 +38,7 @@ async function updateEmployee(req, res, next) {
     if (!row) {
       throw new ApiError(404, "Employee not found");
     }
+    invalidateBusinessAnalyticsCache(row.businessType);
     return res.status(200).json(row);
   } catch (error) {
     return next(error);
@@ -55,6 +58,7 @@ async function deleteEmployee(req, res, next) {
       throw new ApiError(404, "Employee not found");
     }
 
+    invalidateBusinessAnalyticsCache(row.businessType);
     return res.status(200).json({ message: "Employee deleted" });
   } catch (error) {
     return next(error);

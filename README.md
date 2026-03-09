@@ -50,6 +50,7 @@ This repo includes `render.yaml` so Render can apply consistent backend/frontend
   - `JWT_SECRET=<strong secret>`
   - `JWT_EXPIRES_IN=7d`
   - `OWNER_MODULE_PASSWORD=<owner module password>`
+  - `ANALYTICS_CACHE_TTL_MS=15000` (optional, speeds repeated analytics reads)
 
 ### Frontend service (`paymenty-frontend`)
 - Root directory: `frontend`

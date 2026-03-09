@@ -2,6 +2,7 @@ const IncentiveRule = require("../models/IncentiveRule.model");
 const ApiError = require("../utils/ApiError");
 const { parseYyyyMmDd } = require("../utils/date");
 const { assertNoRuleOverlap } = require("../services/rules.service");
+const { invalidateBusinessAnalyticsCache } = require("../services/analytics.service");
 
 async function createRule(req, res, next) {
   try {
@@ -34,6 +35,7 @@ async function createRule(req, res, next) {
 
     await assertNoRuleOverlap(payload);
     const rule = await IncentiveRule.create(payload);
+    invalidateBusinessAnalyticsCache(rule.businessType);
     return res.status(201).json(rule);
   } catch (error) {
     return next(error);

@@ -6,6 +6,9 @@ const {
   butcherCutsExpressionWithRule
 } = require("./payout.service");
 
+const ANALYTICS_CACHE_TTL_MS = Number(process.env.ANALYTICS_CACHE_TTL_MS || 15000);
+const analyticsCache = new Map();
+
 function utcStartOfDay(date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
@@ -157,6 +160,43 @@ function emptyWindow() {
 }
 
 async function getBusinessAnalytics(businessType) {
+  const cacheKey = String(businessType);
+  const now = Date.now();
+  const cached = analyticsCache.get(cacheKey);
+
+  if (cached && cached.payload && cached.expiresAt > now) {
+    return cached.payload;
+  }
+
+  if (cached && cached.inFlight) {
+    return cached.inFlight;
+  }
+
+  const inFlight = (async () => {
+    const payload = await computeBusinessAnalytics(businessType);
+    analyticsCache.set(cacheKey, {
+      payload,
+      expiresAt: Date.now() + ANALYTICS_CACHE_TTL_MS,
+      inFlight: null
+    });
+    return payload;
+  })();
+
+  analyticsCache.set(cacheKey, {
+    payload: cached?.payload || null,
+    expiresAt: cached?.expiresAt || 0,
+    inFlight
+  });
+
+  try {
+    return await inFlight;
+  } catch (error) {
+    analyticsCache.delete(cacheKey);
+    throw error;
+  }
+}
+
+async function computeBusinessAnalytics(businessType) {
   const bounds = currentPeriodBounds();
   const analysisStart = bounds.trendStart < bounds.monthStart ? bounds.trendStart : bounds.monthStart;
 
@@ -245,6 +285,14 @@ async function getBusinessAnalytics(businessType) {
   };
 }
 
+function invalidateBusinessAnalyticsCache(businessType) {
+  if (!businessType) {
+    analyticsCache.clear();
+    return;
+  }
+  analyticsCache.delete(String(businessType));
+}
+
 function parseDateOnlyToUtcBounds(startDate, endDate) {
   const [sy, sm, sd] = startDate.split("-").map(Number);
   const [ey, em, ed] = endDate.split("-").map(Number);
@@ -319,5 +367,6 @@ async function getEmployeeWorkHistory(employeeId, query) {
 
 module.exports = {
   getBusinessAnalytics,
-  getEmployeeWorkHistory
+  getEmployeeWorkHistory,
+  invalidateBusinessAnalyticsCache
 };

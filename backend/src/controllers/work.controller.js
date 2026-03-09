@@ -2,7 +2,10 @@ const WorkEntry = require("../models/WorkEntry.model");
 const Employee = require("../models/Employee.model");
 const ApiError = require("../utils/ApiError");
 const { parseYyyyMmDd } = require("../utils/date");
-const { getEmployeeWorkHistory } = require("../services/analytics.service");
+const {
+  getEmployeeWorkHistory,
+  invalidateBusinessAnalyticsCache
+} = require("../services/analytics.service");
 
 async function createWorkEntry(req, res, next) {
   try {
@@ -28,6 +31,7 @@ async function createWorkEntry(req, res, next) {
       updatedBy: req.user.id
     });
 
+    invalidateBusinessAnalyticsCache(employee.businessType);
     return res.status(201).json(row);
   } catch (error) {
     return next(error);
@@ -57,6 +61,7 @@ async function updateWorkEntry(req, res, next) {
       throw new ApiError(404, "Work entry not found");
     }
 
+    invalidateBusinessAnalyticsCache(row.businessType);
     return res.status(200).json(row);
   } catch (error) {
     return next(error);
@@ -76,6 +81,7 @@ async function deleteWorkEntry(req, res, next) {
       throw new ApiError(404, "Work entry not found");
     }
 
+    invalidateBusinessAnalyticsCache(row.businessType);
     return res.status(200).json({ message: "Work entry deleted" });
   } catch (error) {
     return next(error);
