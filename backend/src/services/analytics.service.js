@@ -1,9 +1,12 @@
 const mongoose = require("mongoose");
 const WorkEntry = require("../models/WorkEntry.model");
 const Employee = require("../models/Employee.model");
+const Business = require("../models/Business.model");
+const ApiError = require("../utils/ApiError");
 const {
   tailorEarningsExpressionWithRule,
-  butcherCutsExpressionWithRule
+  butcherCutsExpressionWithRule,
+  metricExpressionForCalcTypeWithRule
 } = require("./payout.service");
 
 const ANALYTICS_CACHE_TTL_MS = Number(process.env.ANALYTICS_CACHE_TTL_MS || 15000);
@@ -32,6 +35,8 @@ function currentPeriodBounds() {
 
   const todayStart = utcStartOfDay(nowUtc);
   const todayEnd = utcEndOfDay(nowUtc);
+  const yesterdayStart = utcStartOfDay(addDays(todayStart, -1));
+  const yesterdayEnd = utcEndOfDay(addDays(todayStart, -1));
 
   const utcDay = nowUtc.getUTCDay(); // 0=Sun ... 6=Sat
   const diffToMonday = (utcDay + 6) % 7;
@@ -51,6 +56,8 @@ function currentPeriodBounds() {
   return {
     todayStart,
     todayEnd,
+    yesterdayStart,
+    yesterdayEnd,
     weekStart,
     weekEnd,
     monthStart,
@@ -110,23 +117,15 @@ function ruleLookupStages(businessTypeExpr) {
   ];
 }
 
-function metricStage(businessType) {
-  if (businessType === "tailor") {
-    return {
-      $addFields: {
-        dayTotal: tailorEarningsExpressionWithRule("$dayHours", "$chosenRule")
-      }
-    };
-  }
-
+function metricStage(calcType) {
   return {
     $addFields: {
-      dayTotal: butcherCutsExpressionWithRule("$dayHours", "$chosenRule")
+      dayTotal: metricExpressionForCalcTypeWithRule(calcType, "$dayHours", "$chosenRule")
     }
   };
 }
 
-async function aggregateEmployeeDaily(businessType, start, end) {
+async function aggregateEmployeeDaily(businessType, start, end, calcType) {
   return WorkEntry.aggregate([
     {
       $match: {
@@ -142,7 +141,7 @@ async function aggregateEmployeeDaily(businessType, start, end) {
       }
     },
     ...ruleLookupStages(businessType),
-    metricStage(businessType),
+    metricStage(calcType),
     {
       $project: {
         _id: 0,
@@ -197,12 +196,17 @@ async function getBusinessAnalytics(businessType) {
 }
 
 async function computeBusinessAnalytics(businessType) {
+  const business = await Business.findOne({ slug: businessType, isActive: true }).lean();
+  if (!business) {
+    throw new ApiError(404, "Business not found");
+  }
+
   const bounds = currentPeriodBounds();
   const analysisStart = bounds.trendStart < bounds.monthStart ? bounds.trendStart : bounds.monthStart;
 
   const [employees, monthDaily] = await Promise.all([
     Employee.find({ businessType, isActive: true }).sort({ createdAt: -1 }).lean(),
-    aggregateEmployeeDaily(businessType, analysisStart, bounds.monthEnd)
+    aggregateEmployeeDaily(businessType, analysisStart, bounds.monthEnd, business.calcType)
   ]);
 
   const employeeBreakdown = new Map(
@@ -215,6 +219,7 @@ async function computeBusinessAnalytics(businessType) {
         email: emp.email,
         placeId: emp.placeId,
         location: emp.location,
+        yesterday: emptyWindow(),
         today: emptyWindow(),
         week: emptyWindow(),
         month: emptyWindow()
@@ -229,6 +234,7 @@ async function computeBusinessAnalytics(businessType) {
   }
 
   const summary = {
+    yesterday: { totalHours: 0, totalEarningsOrCuts: 0 },
     today: { totalHours: 0, totalEarningsOrCuts: 0 },
     week: { totalHours: 0, totalEarningsOrCuts: 0 },
     month: { totalHours: 0, totalEarningsOrCuts: 0 }
@@ -249,6 +255,13 @@ async function computeBusinessAnalytics(businessType) {
     breakdown.month.total += total;
     summary.month.totalHours += hours;
     summary.month.totalEarningsOrCuts += total;
+
+    if (d >= bounds.yesterdayStart && d <= bounds.yesterdayEnd) {
+      breakdown.yesterday.hours += hours;
+      breakdown.yesterday.total += total;
+      summary.yesterday.totalHours += hours;
+      summary.yesterday.totalEarningsOrCuts += total;
+    }
 
     if (d >= bounds.weekStart && d <= bounds.weekEnd) {
       breakdown.week.hours += hours;
@@ -275,8 +288,11 @@ async function computeBusinessAnalytics(businessType) {
     .sort((a, b) => a.date.localeCompare(b.date));
 
   return {
+    businessName: business.name,
     businessType,
-    unit: businessType === "tailor" ? "earnings" : "cuts",
+    calcType: business.calcType,
+    unit: business.calcType === "butcher_cuts_v1" ? "cuts" : "earnings",
+    yesterday: summary.yesterday,
     today: summary.today,
     week: summary.week,
     month: summary.month,
@@ -343,12 +359,32 @@ async function getEmployeeWorkHistory(employeeId, query) {
     },
     ...ruleLookupStages("$_id.businessType"),
     {
+      $lookup: {
+        from: "businesses",
+        localField: "_id.businessType",
+        foreignField: "slug",
+        as: "businessDoc"
+      }
+    },
+    {
+      $addFields: {
+        businessDoc: { $arrayElemAt: ["$businessDoc", 0] }
+      }
+    },
+    {
+      $addFields: {
+        resolvedCalcType: {
+          $ifNull: ["$chosenRule.calcType", { $ifNull: ["$businessDoc.calcType", "tailor_slab_v1"] }]
+        }
+      }
+    },
+    {
       $addFields: {
         dayMetric: {
           $cond: [
-            { $eq: ["$_id.businessType", "tailor"] },
-            tailorEarningsExpressionWithRule("$totalHours", "$chosenRule"),
-            butcherCutsExpressionWithRule("$totalHours", "$chosenRule")
+            { $eq: ["$resolvedCalcType", "butcher_cuts_v1"] },
+            butcherCutsExpressionWithRule("$totalHours", "$chosenRule"),
+            tailorEarningsExpressionWithRule("$totalHours", "$chosenRule")
           ]
         }
       }
@@ -360,8 +396,7 @@ async function getEmployeeWorkHistory(employeeId, query) {
     date: r._id.workDate,
     entries: r.entries,
     totalHours: r.totalHours,
-    derivedEarnings: r._id.businessType === "tailor" ? r.dayMetric : undefined,
-    derivedCuts: r._id.businessType === "butcher" ? r.dayMetric : undefined
+    derivedMetric: r.dayMetric
   }));
 }
 

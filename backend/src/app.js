@@ -8,6 +8,7 @@ const analyticsRoutes = require("./routes/analytics.routes");
 const ruleRoutes = require("./routes/rule.routes");
 const paymentRoutes = require("./routes/payment.routes");
 const ownerRoutes = require("./routes/owner.routes");
+const businessRoutes = require("./routes/business.routes");
 const errorMiddleware = require("./middlewares/error.middleware");
 
 const app = express();
@@ -26,6 +27,7 @@ app.use("/api/analytics", analyticsRoutes);
 app.use("/api/rules", ruleRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/owners", ownerRoutes);
+app.use("/api/businesses", businessRoutes);
 
 app.use(errorMiddleware);
 

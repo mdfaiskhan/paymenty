@@ -1,7 +1,10 @@
 const { z } = require("zod");
 
-const businessType = z.enum(["tailor", "butcher"]);
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, "Invalid ObjectId");
+const businessSlug = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/i, "Invalid business slug");
 
 const createEmployeeSchema = z.object({
   body: z.object({
@@ -10,7 +13,7 @@ const createEmployeeSchema = z.object({
     email: z.string().trim().email().max(160),
     placeId: z.string().trim().min(1).max(80),
     location: z.string().trim().min(1).max(120),
-    businessType
+    businessType: businessSlug
   }),
   query: z.object({}).passthrough(),
   params: z.object({}).passthrough()
@@ -32,7 +35,7 @@ const updateEmployeeSchema = z.object({
 const listEmployeesSchema = z.object({
   body: z.object({}).passthrough(),
   query: z.object({
-    businessType: businessType.optional(),
+    businessType: businessSlug.optional(),
     search: z.string().trim().optional()
   }),
   params: z.object({}).passthrough()

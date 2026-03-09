@@ -2,7 +2,7 @@ import { formatTwoDecimals, toFiniteNumber } from "../utils/number";
 import { useState } from "react";
 
 export default function EmployeeTable({
-  businessType,
+  unit = "earnings",
   rows,
   onAddHours,
   onHistory,
@@ -10,10 +10,12 @@ export default function EmployeeTable({
   onDelete
 }) {
   const [moreFor, setMoreFor] = useState(null);
-  const metricHeader = businessType === "tailor" ? "Earnings" : "Cuts";
+  const metricHeader = unit === "cuts" ? "Cuts" : "Earnings";
+  const formatHours = (value) => formatTwoDecimals(toFiniteNumber(value, 0), 0).replace(/\.00$/, "");
   const metricValue = (period) => {
     const total = toFiniteNumber(period?.total, 0);
-    return businessType === "tailor" ? `INR ${formatTwoDecimals(total, 0)}` : formatTwoDecimals(total, 0);
+    const formatted = formatTwoDecimals(total, 0).replace(/\.00$/, "");
+    return unit === "cuts" ? formatted : `INR ${formatted}`;
   };
 
   async function copyText(value) {
@@ -33,10 +35,8 @@ export default function EmployeeTable({
         <thead>
           <tr>
             <th>Name</th>
-            <th>Today Hours</th>
-            <th>Today {metricHeader}</th>
-            <th>Week Hours</th>
-            <th>Week {metricHeader}</th>
+            <th>Yesterday Hours</th>
+            <th>Yesterday {metricHeader}</th>
             <th>Month Hours</th>
             <th>Month {metricHeader}</th>
             <th>Actions</th>
@@ -51,11 +51,9 @@ export default function EmployeeTable({
                 <div className="subtext">{row.email}</div>
                 <div className="subtext">Place: {row.placeId || "-"}</div>
               </td>
-              <td data-label="Today Hours">{formatTwoDecimals(row.today.hours, 0)}</td>
-              <td data-label={`Today ${metricHeader}`}>{metricValue(row.today)}</td>
-              <td data-label="Week Hours">{formatTwoDecimals(row.week.hours, 0)}</td>
-              <td data-label={`Week ${metricHeader}`}>{metricValue(row.week)}</td>
-              <td data-label="Month Hours">{formatTwoDecimals(row.month.hours, 0)}</td>
+              <td data-label="Yesterday Hours">{formatHours(row.yesterday?.hours)}</td>
+              <td data-label={`Yesterday ${metricHeader}`}>{metricValue(row.yesterday)}</td>
+              <td data-label="Month Hours">{formatHours(row.month?.hours)}</td>
               <td data-label={`Month ${metricHeader}`}>{metricValue(row.month)}</td>
               <td data-label="Actions">
                 <div className="action-row">

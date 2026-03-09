@@ -30,12 +30,6 @@ export default function AppLayout() {
           <NavLink to="/" end onClick={() => setMobileNavOpen(false)}>
             Businesses
           </NavLink>
-          <NavLink to="/business/tailor" onClick={() => setMobileNavOpen(false)}>
-            Tailor
-          </NavLink>
-          <NavLink to="/business/butcher" onClick={() => setMobileNavOpen(false)}>
-            Butcher
-          </NavLink>
           <NavLink to="/owners" onClick={() => setMobileNavOpen(false)}>
             Owner Expenditure
           </NavLink>

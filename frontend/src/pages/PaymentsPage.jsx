@@ -10,6 +10,7 @@ import {
 } from "../api/paymentApi";
 import { formatTwoDecimals, toFiniteNumber } from "../utils/number";
 import { getCurrentMonth, todayDateOnly } from "../utils/date";
+import { useBusinesses } from "../context/BusinessContext";
 
 function money(v) {
   return formatTwoDecimals(v, 0);
@@ -89,6 +90,7 @@ function buildStatus(computedAmount, paidAmount) {
 }
 
 export default function PaymentsPage() {
+  const { businesses } = useBusinesses();
   const [businessType, setBusinessType] = useState("all");
   const [rangeType, setRangeType] = useState("month");
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth());
@@ -261,13 +263,16 @@ export default function PaymentsPage() {
       <header className="page-head">
         <div>
           <h1>Payments</h1>
-          <p>Settlement tracking dashboard for Tailor + Butcher earnings, payouts, and pending balances</p>
+          <p>Settlement tracking dashboard for all businesses</p>
         </div>
         <div className="filters">
           <select value={businessType} onChange={(e) => setBusinessType(e.target.value)}>
             <option value="all">All</option>
-            <option value="tailor">Tailor</option>
-            <option value="butcher">Butcher</option>
+            {businesses.map((business) => (
+              <option key={business.slug} value={business.slug}>
+                {business.name}
+              </option>
+            ))}
           </select>
           <select value={rangeType} onChange={(e) => setRangeType(e.target.value)}>
             <option value="today">Today</option>

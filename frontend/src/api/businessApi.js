@@ -1,5 +1,15 @@
 import apiClient from "./client";
 
+export async function getBusinessesApi() {
+  const { data } = await apiClient.get("/api/businesses");
+  return data;
+}
+
+export async function createBusinessApi(payload) {
+  const { data } = await apiClient.post("/api/businesses", payload);
+  return data;
+}
+
 export async function getEmployeesApi({ businessType, search = "" }) {
   const { data } = await apiClient.get("/api/employees", {
     params: { businessType, search: search || undefined }

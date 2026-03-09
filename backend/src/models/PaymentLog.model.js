@@ -14,7 +14,6 @@ const paymentLogSchema = new mongoose.Schema(
     },
     businessType: {
       type: String,
-      enum: ["tailor", "butcher", "owners"],
       required: true
     },
     periodStart: { type: Date, required: true },

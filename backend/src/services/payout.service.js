@@ -54,7 +54,15 @@ function butcherCutsExpressionWithRule(dayHoursPath = "$dayHours", rulePath = "$
   };
 }
 
+function metricExpressionForCalcTypeWithRule(calcType, dayHoursPath = "$dayHours", rulePath = "$chosenRule") {
+  if (calcType === "butcher_cuts_v1") {
+    return butcherCutsExpressionWithRule(dayHoursPath, rulePath);
+  }
+  return tailorEarningsExpressionWithRule(dayHoursPath, rulePath);
+}
+
 module.exports = {
   tailorEarningsExpressionWithRule,
-  butcherCutsExpressionWithRule
+  butcherCutsExpressionWithRule,
+  metricExpressionForCalcTypeWithRule
 };

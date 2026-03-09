@@ -3,7 +3,13 @@ import { calculateDerivedMetric } from "../utils/earnings";
 import { formatTwoDecimals, toFiniteNumber } from "../utils/number";
 import DurationPicker, { formatHoursAndMinutes } from "./DurationPicker";
 
-export default function WorkHistoryView({ businessType, days, onEditEntry, onDeleteEntry }) {
+export default function WorkHistoryView({
+  unit = "earnings",
+  calcType = "tailor_slab_v1",
+  days,
+  onEditEntry,
+  onDeleteEntry
+}) {
   const [editing, setEditing] = useState(null);
   const [editDurationHours, setEditDurationHours] = useState(0);
   const [editDate, setEditDate] = useState("");
@@ -41,7 +47,7 @@ export default function WorkHistoryView({ businessType, days, onEditEntry, onDel
             <th>Date</th>
             <th>Entries</th>
             <th>Total Hours</th>
-            <th>{businessType === "tailor" ? "Derived Earnings" : "Derived Cuts"}</th>
+            <th>{unit === "cuts" ? "Derived Cuts" : "Derived Earnings"}</th>
           </tr>
         </thead>
         <tbody>
@@ -104,16 +110,16 @@ export default function WorkHistoryView({ businessType, days, onEditEntry, onDel
                 </div>
               </td>
               <td data-label="Total Hours">{formatHoursAndMinutes(day.totalHours)}</td>
-              <td data-label={businessType === "tailor" ? "Derived Earnings" : "Derived Cuts"}>
-                {businessType === "tailor"
-                  ? `INR ${formatTwoDecimals(
-                      toFiniteNumber(day.derivedEarnings, calculateDerivedMetric(day.totalHours, "tailor")),
+              <td data-label={unit === "cuts" ? "Derived Cuts" : "Derived Earnings"}>
+                {unit === "cuts"
+                  ? formatTwoDecimals(
+                      toFiniteNumber(day.derivedMetric, calculateDerivedMetric(day.totalHours, calcType)),
                       0
-                    )}`
-                  : formatTwoDecimals(
-                      toFiniteNumber(day.derivedCuts, calculateDerivedMetric(day.totalHours, "butcher")),
+                    )
+                  : `INR ${formatTwoDecimals(
+                      toFiniteNumber(day.derivedMetric, calculateDerivedMetric(day.totalHours, calcType)),
                       0
-                    )}
+                    )}`}
               </td>
             </tr>
           ))}

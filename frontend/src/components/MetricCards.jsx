@@ -1,21 +1,17 @@
 import { formatTwoDecimals, toFiniteNumber } from "../utils/number";
 
 function formatMetricNumber(value) {
-  return formatTwoDecimals(toFiniteNumber(value, 0), 0);
+  const raw = formatTwoDecimals(toFiniteNumber(value, 0), 0);
+  return raw.replace(/\.00$/, "");
 }
 
-export default function MetricCards({ businessType, analytics }) {
-  const label = businessType === "tailor" ? "Earnings" : "Cuts";
+export default function MetricCards({ analytics }) {
+  const isEarnings = analytics?.unit !== "cuts";
   const cards = [
     [
-      "Today",
-      toFiniteNumber(analytics?.today?.totalEarningsOrCuts, 0),
-      toFiniteNumber(analytics?.today?.totalHours, 0)
-    ],
-    [
-      "This Week",
-      toFiniteNumber(analytics?.week?.totalEarningsOrCuts, 0),
-      toFiniteNumber(analytics?.week?.totalHours, 0)
+      "Yesterday",
+      toFiniteNumber(analytics?.yesterday?.totalEarningsOrCuts, 0),
+      toFiniteNumber(analytics?.yesterday?.totalHours, 0)
     ],
     [
       "This Month",
@@ -29,10 +25,8 @@ export default function MetricCards({ businessType, analytics }) {
       {cards.map(([title, value, hours]) => (
         <article className="card metric-card" key={title}>
           <p>{title}</p>
-          <h3>{businessType === "tailor" ? `INR ${formatMetricNumber(value)}` : formatMetricNumber(value)}</h3>
-          <small>
-            {label}: {formatMetricNumber(hours)} hrs
-          </small>
+          <h3>{isEarnings ? `INR ${formatMetricNumber(value)}` : formatMetricNumber(value)}</h3>
+          <small>Hours: {formatMetricNumber(hours)}</small>
         </article>
       ))}
     </div>

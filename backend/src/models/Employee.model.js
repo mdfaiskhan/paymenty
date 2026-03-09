@@ -9,7 +9,6 @@ const employeeSchema = new mongoose.Schema(
     location: { type: String, required: true, trim: true, maxlength: 120 },
     businessType: {
       type: String,
-      enum: ["tailor", "butcher"],
       required: true
     },
     isActive: { type: Boolean, default: true },

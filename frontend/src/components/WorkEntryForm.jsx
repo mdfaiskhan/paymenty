@@ -4,14 +4,14 @@ import { calculateDerivedMetric } from "../utils/earnings";
 import { formatTwoDecimals } from "../utils/number";
 import DurationPicker from "./DurationPicker";
 
-export default function WorkEntryForm({ employeeId, businessType, onSubmit }) {
+export default function WorkEntryForm({ employeeId, unit = "earnings", calcType = "tailor_slab_v1", onSubmit }) {
   const [workDate, setWorkDate] = useState(todayDateOnly());
   const [durationHours, setDurationHours] = useState(1);
   const [videoId, setVideoId] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const estimated = calculateDerivedMetric(durationHours, businessType);
+  const estimated = calculateDerivedMetric(durationHours, calcType);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -46,9 +46,9 @@ export default function WorkEntryForm({ employeeId, businessType, onSubmit }) {
       <input type="date" value={workDate} onChange={(e) => setWorkDate(e.target.value)} required />
       <DurationPicker value={durationHours} onChange={setDurationHours} label="Work Time" />
       <p className="subtext">
-        {businessType === "tailor"
-          ? `Estimated earnings: INR ${formatTwoDecimals(estimated, 0)}`
-          : `Estimated cuts: ${formatTwoDecimals(estimated, 0)}`}
+        {unit === "cuts"
+          ? `Estimated cuts: ${formatTwoDecimals(estimated, 0)}`
+          : `Estimated earnings: INR ${formatTwoDecimals(estimated, 0)}`}
       </p>
       <input value={videoId} placeholder="Video ID" onChange={(e) => setVideoId(e.target.value)} />
       <input value={note} placeholder="Note" onChange={(e) => setNote(e.target.value)} />

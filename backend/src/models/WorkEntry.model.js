@@ -9,7 +9,6 @@ const workEntrySchema = new mongoose.Schema(
     },
     businessType: {
       type: String,
-      enum: ["tailor", "butcher"],
       required: true
     },
     workDate: { type: Date, required: true },

@@ -14,6 +14,6 @@ export function calculateButcherCuts(hours) {
   return toNumber(hours, 0) * 200;
 }
 
-export function calculateDerivedMetric(hours, businessType) {
-  return businessType === "tailor" ? calculateTailorEarnings(hours) : calculateButcherCuts(hours);
+export function calculateDerivedMetric(hours, calcType = "tailor_slab_v1") {
+  return calcType === "butcher_cuts_v1" ? calculateButcherCuts(hours) : calculateTailorEarnings(hours);
 }

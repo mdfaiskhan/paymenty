@@ -19,6 +19,7 @@ import {
 import { getCurrentMonth, monthOptions, todayDateOnly } from "../utils/date";
 import { downloadCsv } from "../utils/csv";
 import { useAnalytics } from "../context/AnalyticsContext";
+import { useBusinesses } from "../context/BusinessContext";
 
 export default function BusinessDashboardPage() {
   const { businessType } = useParams();
@@ -29,9 +30,10 @@ export default function BusinessDashboardPage() {
     error,
     refreshAnalytics
   } = useAnalytics();
+  const { businesses } = useBusinesses();
 
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState("monthTotalDesc");
+  const [sortBy, setSortBy] = useState("amountDesc");
   const [sortRange, setSortRange] = useState("month");
   const [addHoursEmployee, setAddHoursEmployee] = useState(null);
   const [historyEmployee, setHistoryEmployee] = useState(null);
@@ -52,6 +54,10 @@ export default function BusinessDashboardPage() {
   }, [businessType, setSelectedBusiness]);
 
   const rows = analyticsData?.employeeBreakdown || [];
+  const activeBusiness = businesses.find((b) => b.slug === businessType);
+  const pageTitle = analyticsData?.businessName || activeBusiness?.name || businessType;
+  const unit = analyticsData?.unit || "earnings";
+  const calcType = analyticsData?.calcType || activeBusiness?.calcType || "tailor_slab_v1";
   const filteredRows = useMemo(() => {
     const normalize = (value) => String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
     const q = normalize(search);
@@ -80,16 +86,15 @@ export default function BusinessDashboardPage() {
     const copy = [...filteredRows];
     const num = (v) => Number(v) || 0;
     const rangeTotal = (row) => {
-      if (sortRange === "today") return num(row.today?.total);
-      if (sortRange === "week") return num(row.week?.total);
+      if (sortRange === "yesterday") return num(row.yesterday?.total);
       return num(row.month?.total);
     };
 
     copy.sort((a, b) => {
-      if (sortBy === "monthTotalAsc") {
+      if (sortBy === "amountAsc") {
         return rangeTotal(a) - rangeTotal(b);
       }
-      if (sortBy === "todayTotalDesc") {
+      if (sortBy === "amountDesc") {
         return rangeTotal(b) - rangeTotal(a);
       }
       if (sortBy === "nameAsc") {
@@ -247,16 +252,14 @@ export default function BusinessDashboardPage() {
   function exportEmployeesCsv() {
     const csvRows = sortedRows.map((row) => ({
       name: row.name,
-      todayHours: row.today.hours,
-      todayTotal: row.today.total,
-      weekHours: row.week.hours,
-      weekTotal: row.week.total,
+      yesterdayHours: row.yesterday?.hours || 0,
+      yesterdayTotal: row.yesterday?.total || 0,
       monthHours: row.month.hours,
       monthTotal: row.month.total
     }));
     downloadCsv(
       `${businessType}-analytics.csv`,
-      ["name", "todayHours", "todayTotal", "weekHours", "weekTotal", "monthHours", "monthTotal"],
+      ["name", "yesterdayHours", "yesterdayTotal", "monthHours", "monthTotal"],
       csvRows
     );
   }
@@ -265,8 +268,8 @@ export default function BusinessDashboardPage() {
     <section>
       <header className="page-head">
         <div>
-          <h1>{businessType === "tailor" ? "Tailor Shop" : "Butcher Shop"}</h1>
-          <p>Operational intelligence dashboard</p>
+          <h1>{pageTitle}</h1>
+          <p>Simple earnings activity dashboard</p>
         </div>
         <div className="filters">
           <input
@@ -275,14 +278,13 @@ export default function BusinessDashboardPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
           <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-            <option value="todayTotalDesc">Range Earnings: High to Low</option>
-            <option value="monthTotalAsc">Range Earnings: Low to High</option>
+            <option value="amountDesc">Amount: High to Low</option>
+            <option value="amountAsc">Amount: Low to High</option>
             <option value="nameAsc">Name: A to Z</option>
             <option value="nameDesc">Name: Z to A</option>
           </select>
           <select value={sortRange} onChange={(e) => setSortRange(e.target.value)}>
-            <option value="today">Today</option>
-            <option value="week">This Week</option>
+            <option value="yesterday">Yesterday</option>
             <option value="month">This Month</option>
           </select>
           <button className="button ghost" onClick={exportEmployeesCsv} type="button">
@@ -295,7 +297,7 @@ export default function BusinessDashboardPage() {
       {loading ? <p className="card">Loading analytics...</p> : null}
 
       <EmployeeTable
-        businessType={businessType}
+        unit={unit}
         rows={sortedRows}
         onAddHours={setAddHoursEmployee}
         onHistory={openHistory}
@@ -303,8 +305,8 @@ export default function BusinessDashboardPage() {
         onDelete={removeEmployee}
       />
 
-      <TrendChart businessType={businessType} dailyTrend={analyticsData?.dailyTrend || []} />
-      <MetricCards businessType={businessType} analytics={analyticsData} />
+      <TrendChart unit={unit} dailyTrend={analyticsData?.dailyTrend || []} />
+      <MetricCards analytics={analyticsData} />
 
       <article className="card section-card">
         <h3>Add Employee</h3>
@@ -319,7 +321,8 @@ export default function BusinessDashboardPage() {
         {addHoursEmployee ? (
           <WorkEntryForm
             employeeId={addHoursEmployee.employeeId}
-            businessType={businessType}
+            unit={unit}
+            calcType={calcType}
             onSubmit={addHours}
           />
         ) : null}
@@ -411,7 +414,8 @@ export default function BusinessDashboardPage() {
           ) : null}
         </div>
         <WorkHistoryView
-          businessType={businessType}
+          unit={unit}
+          calcType={calcType}
           days={historyRows}
           onEditEntry={editHistoryEntry}
           onDeleteEntry={deleteHistoryEntry}

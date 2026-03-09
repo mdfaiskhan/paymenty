@@ -18,7 +18,7 @@ function buildPoints(values, width, height, pad) {
     .join(" ");
 }
 
-export default function TrendChart({ businessType, dailyTrend }) {
+export default function TrendChart({ unit = "earnings", dailyTrend }) {
   const width = 840;
   const height = 260;
   const pad = 28;
@@ -27,7 +27,7 @@ export default function TrendChart({ businessType, dailyTrend }) {
 
   return (
     <article className="card section-card">
-      <h3>Last 7 Days Trend ({businessType === "tailor" ? "Earnings" : "Cuts"})</h3>
+      <h3>Last 7 Days Trend ({unit === "cuts" ? "Cuts" : "Earnings"})</h3>
       <div className="trend-wrap">
         <svg viewBox={`0 0 ${width} ${height}`} className="trend-chart" role="img" aria-label="Daily trend chart">
           <polyline fill="none" stroke="#155eef" strokeWidth="3" points={points} />
@@ -46,9 +46,9 @@ export default function TrendChart({ businessType, dailyTrend }) {
             <div key={d.date} className="trend-label-item">
               <span>{d.date.slice(5)}</span>
               <strong>
-                {businessType === "tailor"
-                  ? `INR ${formatTwoDecimals(d.total, 0)}`
-                  : formatTwoDecimals(d.total, 0)}
+                {unit === "cuts"
+                  ? formatTwoDecimals(d.total, 0)
+                  : `INR ${formatTwoDecimals(d.total, 0)}`}
               </strong>
             </div>
           ))}

@@ -9,6 +9,7 @@ const {
 } = require("../services/payment.service");
 const env = require("../config/env");
 const ApiError = require("../utils/ApiError");
+const { toSlug } = require("../services/business.service");
 
 function ensureOwnerModuleAccess(req) {
   const provided = req.headers["x-owner-password"];
@@ -19,6 +20,7 @@ function ensureOwnerModuleAccess(req) {
 
 async function createPayment(req, res, next) {
   try {
+    req.validated.body.businessType = toSlug(req.validated.body.businessType);
     if (req.validated.body.businessType === "owners") {
       ensureOwnerModuleAccess(req);
     }
@@ -31,12 +33,16 @@ async function createPayment(req, res, next) {
 
 async function listPayments(req, res, next) {
   try {
-    const { businessType = "all", rangeType = "month", startDate, endDate, search } = req.validated.query;
-    if (businessType === "owners") {
+    const normalizedBusinessType =
+      req.validated.query.businessType && req.validated.query.businessType !== "all"
+        ? toSlug(req.validated.query.businessType)
+        : req.validated.query.businessType || "all";
+    const { rangeType = "month", startDate, endDate, search } = req.validated.query;
+    if (normalizedBusinessType === "owners") {
       ensureOwnerModuleAccess(req);
     }
     const payload = await listPaymentsWithBalances({
-      businessType,
+      businessType: normalizedBusinessType,
       rangeType,
       startDate,
       endDate,
@@ -88,12 +94,21 @@ async function deletePayment(req, res, next) {
 
 async function getPaymentSummary(req, res, next) {
   try {
-    const { businessType = "all", rangeType = "month", startDate, endDate } = req.validated.query;
-    if (businessType === "owners") {
+    const normalizedBusinessType =
+      req.validated.query.businessType && req.validated.query.businessType !== "all"
+        ? toSlug(req.validated.query.businessType)
+        : req.validated.query.businessType || "all";
+    const { rangeType = "month", startDate, endDate } = req.validated.query;
+    if (normalizedBusinessType === "owners") {
       ensureOwnerModuleAccess(req);
     }
-    const summary = await getSummary({ businessType, rangeType, startDate, endDate });
-    const history = await getPaymentHistory({ businessType, rangeType, startDate, endDate });
+    const summary = await getSummary({ businessType: normalizedBusinessType, rangeType, startDate, endDate });
+    const history = await getPaymentHistory({
+      businessType: normalizedBusinessType,
+      rangeType,
+      startDate,
+      endDate
+    });
     return res.status(200).json({
       ...summary,
       paymentHistory: history
@@ -105,7 +120,8 @@ async function getPaymentSummary(req, res, next) {
 
 async function reconciliation(req, res, next) {
   try {
-    const { businessType, month } = req.validated.query;
+    const { month } = req.validated.query;
+    const businessType = toSlug(req.validated.query.businessType);
     const [year, mm] = month.split("-").map(Number);
     const startDate = `${year}-${String(mm).padStart(2, "0")}-01`;
     const lastDay = new Date(Date.UTC(year, mm, 0)).getUTCDate();

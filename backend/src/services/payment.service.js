@@ -1,5 +1,6 @@
 const Employee = require("../models/Employee.model");
 const Owner = require("../models/Owner.model");
+const Business = require("../models/Business.model");
 const OwnerDailyHours = require("../models/OwnerDailyHours.model");
 const OwnerCommissionRule = require("../models/OwnerCommissionRule.model");
 const WorkEntry = require("../models/WorkEntry.model");
@@ -7,8 +8,7 @@ const PaymentLog = require("../models/PaymentLog.model");
 const ApiError = require("../utils/ApiError");
 const { parseYyyyMmDd } = require("../utils/date");
 const {
-  tailorEarningsExpressionWithRule,
-  butcherCutsExpressionWithRule
+  metricExpressionForCalcTypeWithRule
 } = require("./payout.service");
 
 function utcStartOfDay(date) {
@@ -72,7 +72,7 @@ function paymentMatchForRange(start, end, businessType = "all") {
   };
 
   if (businessType === "all") {
-    match.businessType = { $in: ["tailor", "butcher"] };
+    match.businessType = { $ne: "owners" };
   } else if (businessType) {
     match.businessType = businessType;
   }
@@ -129,7 +129,7 @@ function ruleLookupStages(businessTypeExpr) {
   ];
 }
 
-async function getEmployeeDerivedByBusiness(businessType, start, end) {
+async function getEmployeeDerivedByBusiness(businessType, calcType, start, end) {
   const rows = await WorkEntry.aggregate([
     {
       $match: {
@@ -147,10 +147,7 @@ async function getEmployeeDerivedByBusiness(businessType, start, end) {
     ...ruleLookupStages(businessType),
     {
       $addFields: {
-        dayMetric:
-          businessType === "tailor"
-            ? tailorEarningsExpressionWithRule("$dayHours", "$chosenRule")
-            : butcherCutsExpressionWithRule("$dayHours", "$chosenRule")
+        dayMetric: metricExpressionForCalcTypeWithRule(calcType, "$dayHours", "$chosenRule")
       }
     },
     {
@@ -170,7 +167,7 @@ async function getEmployeeDerivedByBusiness(businessType, start, end) {
   );
 }
 
-async function getDailyEarnedByBusiness(businessType, start, end) {
+async function getDailyEarnedByBusiness(businessType, calcType, start, end) {
   const rows = await WorkEntry.aggregate([
     {
       $match: {
@@ -188,10 +185,7 @@ async function getDailyEarnedByBusiness(businessType, start, end) {
     ...ruleLookupStages(businessType),
     {
       $addFields: {
-        dayMetric:
-          businessType === "tailor"
-            ? tailorEarningsExpressionWithRule("$dayHours", "$chosenRule")
-            : butcherCutsExpressionWithRule("$dayHours", "$chosenRule")
+        dayMetric: metricExpressionForCalcTypeWithRule(calcType, "$dayHours", "$chosenRule")
       }
     },
     {
@@ -213,13 +207,15 @@ async function getDailyEarnedByBusiness(businessType, start, end) {
 }
 
 async function getEarnedTrend({ businessType = "all", start, end }) {
-  const rows =
+  const businesses =
     businessType === "all"
-      ? [
-          ...(await getDailyEarnedByBusiness("tailor", start, end)),
-          ...(await getDailyEarnedByBusiness("butcher", start, end))
-        ]
-      : await getDailyEarnedByBusiness(businessType, start, end);
+      ? await Business.find({ isActive: true }).select({ slug: 1, calcType: 1 }).lean()
+      : await Business.find({ isActive: true, slug: businessType }).select({ slug: 1, calcType: 1 }).lean();
+
+  const rowGroups = await Promise.all(
+    businesses.map((b) => getDailyEarnedByBusiness(b.slug, b.calcType || "tailor_slab_v1", start, end))
+  );
+  const rows = rowGroups.flat();
 
   const byDate = new Map();
   rows.forEach((row) => {
@@ -299,27 +295,32 @@ async function getOwnerDerivedMap(start, end) {
 async function getEntityDerivedMap({ businessType = "all", start, end }) {
   const result = new Map();
 
-  if (businessType === "all" || businessType === "tailor") {
-    const rows = await getEmployeeDerivedByBusiness("tailor", start, end);
-    rows.forEach((value, key) => {
-      result.set(`employee:${key}`, {
-        entityType: "employee",
-        businessType: "tailor",
-        ...value
-      });
-    });
-  }
+  const businesses =
+    businessType === "all"
+      ? await Business.find({ isActive: true }).select({ slug: 1, calcType: 1 }).lean()
+      : await Business.find({ isActive: true, slug: businessType }).select({ slug: 1, calcType: 1 }).lean();
 
-  if (businessType === "all" || businessType === "butcher") {
-    const rows = await getEmployeeDerivedByBusiness("butcher", start, end);
-    rows.forEach((value, key) => {
+  const derivedGroups = await Promise.all(
+    businesses.map(async (business) => ({
+      slug: business.slug,
+      rows: await getEmployeeDerivedByBusiness(
+        business.slug,
+        business.calcType || "tailor_slab_v1",
+        start,
+        end
+      )
+    }))
+  );
+
+  derivedGroups.forEach((group) => {
+    group.rows.forEach((value, key) => {
       result.set(`employee:${key}`, {
         entityType: "employee",
-        businessType: "butcher",
+        businessType: group.slug,
         ...value
       });
     });
-  }
+  });
 
   if (businessType === "owners") {
     const ownerMap = await getOwnerDerivedMap(start, end);
@@ -409,6 +410,10 @@ function parsePaymentDoc(payment) {
 }
 
 async function getDerivedAmountForEmployeePeriod(employeeId, businessType, periodStart, periodEnd) {
+  const business = await Business.findOne({ slug: businessType, isActive: true }).lean();
+  if (!business) {
+    throw new ApiError(400, "Unknown business type");
+  }
   const rows = await WorkEntry.aggregate([
     {
       $match: {
@@ -427,10 +432,11 @@ async function getDerivedAmountForEmployeePeriod(employeeId, businessType, perio
     ...ruleLookupStages(businessType),
     {
       $addFields: {
-        dayMetric:
-          businessType === "tailor"
-            ? tailorEarningsExpressionWithRule("$dayHours", "$chosenRule")
-            : butcherCutsExpressionWithRule("$dayHours", "$chosenRule")
+        dayMetric: metricExpressionForCalcTypeWithRule(
+          business.calcType || "tailor_slab_v1",
+          "$dayHours",
+          "$chosenRule"
+        )
       }
     },
     {
@@ -497,6 +503,10 @@ async function createPaymentLog(payload, adminId) {
     }
     computed = await getDerivedAmountForOwnerPeriod(payload.ownerId, periodStart, periodEnd);
   } else {
+    const business = await Business.findOne({ slug: payload.businessType, isActive: true }).lean();
+    if (!business) {
+      throw new ApiError(400, "Unknown business type");
+    }
     if (!payload.employeeId || payload.ownerId) {
       throw new ApiError(400, "Employee payments require employeeId only");
     }
@@ -604,7 +614,7 @@ async function listPaymentsWithBalances({ businessType = "all", rangeType, start
   ]);
 
   const allKeys = new Set([...derivedMap.keys(), ...paidMap.keys()]);
-  if (businessType === "all" || businessType === "tailor" || businessType === "butcher") {
+  if (businessType === "all" || businessType !== "owners") {
     names.employeeMap.forEach((value, key) => {
       if (businessType === "all" || value.businessType === businessType) {
         allKeys.add(`employee:${key}`);
@@ -629,7 +639,7 @@ async function listPaymentsWithBalances({ businessType = "all", rangeType, start
 
     const rowBusinessType =
       derived.businessType ||
-      (entityType === "owner" ? "owners" : names.employeeMap.get(entityId)?.businessType || "tailor");
+      (entityType === "owner" ? "owners" : names.employeeMap.get(entityId)?.businessType || "unknown");
     const totalEarned = Number(derived.computedAmount) || 0;
     const totalPaid = Number(paid.totalPaid) || 0;
     const pendingBalance = totalEarned - totalPaid;
@@ -678,7 +688,7 @@ async function getPaidTrendLast7Days({ businessType = "all" }) {
     paidAt: { $gte: trendStart, $lte: todayEnd }
   };
   if (businessType === "all") {
-    match.businessType = { $in: ["tailor", "butcher"] };
+    match.businessType = { $ne: "owners" };
   } else {
     match.businessType = businessType;
   }

@@ -3,7 +3,10 @@ const { z } = require("zod");
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, "Invalid ObjectId");
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD");
 const paymentStatus = z.enum(["pending", "partial", "paid"]);
-const businessType = z.enum(["tailor", "butcher", "owners"]);
+const businessType = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/i, "Invalid business slug");
 const paymentMethod = z.enum(["cash", "bank", "upi"]);
 const rangeType = z.enum(["today", "week", "month", "custom"]);
 
@@ -60,7 +63,7 @@ const updatePaymentSchema = z.object({
 const listPaymentsSchema = z.object({
   body: z.object({}).passthrough(),
   query: z.object({
-    businessType: z.enum(["all", "tailor", "butcher", "owners"]).optional(),
+    businessType: z.union([z.literal("all"), businessType]).optional(),
     rangeType: rangeType.optional(),
     startDate: dateOnly.optional(),
     endDate: dateOnly.optional(),
@@ -78,7 +81,7 @@ const paymentByIdSchema = z.object({
 const summarySchema = z.object({
   body: z.object({}).passthrough(),
   query: z.object({
-    businessType: z.enum(["all", "tailor", "butcher", "owners"]).optional(),
+    businessType: z.union([z.literal("all"), businessType]).optional(),
     rangeType: rangeType.optional(),
     startDate: dateOnly.optional(),
     endDate: dateOnly.optional()
@@ -89,7 +92,7 @@ const summarySchema = z.object({
 const reconciliationSchema = z.object({
   body: z.object({}).passthrough(),
   query: z.object({
-    businessType: z.enum(["tailor", "butcher"]),
+    businessType,
     month: z.string().regex(/^\d{4}-\d{2}$/, "Month must be YYYY-MM")
   }),
   params: z.object({}).passthrough()

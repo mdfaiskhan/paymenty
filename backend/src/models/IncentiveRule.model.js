@@ -4,7 +4,6 @@ const incentiveRuleSchema = new mongoose.Schema(
   {
     businessType: {
       type: String,
-      enum: ["tailor", "butcher"],
       required: true
     },
     scope: {

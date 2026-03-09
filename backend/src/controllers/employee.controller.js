@@ -1,10 +1,13 @@
 const Employee = require("../models/Employee.model");
 const ApiError = require("../utils/ApiError");
 const { invalidateBusinessAnalyticsCache } = require("../services/analytics.service");
+const { getBusinessBySlug, toSlug } = require("../services/business.service");
 
 async function createEmployee(req, res, next) {
   try {
-    const employee = await Employee.create(req.validated.body);
+    const businessType = toSlug(req.validated.body.businessType);
+    await getBusinessBySlug(businessType);
+    const employee = await Employee.create({ ...req.validated.body, businessType });
     invalidateBusinessAnalyticsCache(employee.businessType);
     return res.status(201).json(employee);
   } catch (error) {
@@ -18,7 +21,7 @@ async function listEmployees(req, res, next) {
     const filter = { isActive: true };
 
     if (businessType) {
-      filter.businessType = businessType;
+      filter.businessType = toSlug(businessType);
     }
     if (search) {
       filter.$text = { $search: search };
@@ -34,7 +37,12 @@ async function listEmployees(req, res, next) {
 async function updateEmployee(req, res, next) {
   try {
     const { id } = req.validated.params;
-    const row = await Employee.findByIdAndUpdate(id, req.validated.body, { new: true });
+    const payload = { ...req.validated.body };
+    if (payload.businessType) {
+      payload.businessType = toSlug(payload.businessType);
+      await getBusinessBySlug(payload.businessType);
+    }
+    const row = await Employee.findByIdAndUpdate(id, payload, { new: true });
     if (!row) {
       throw new ApiError(404, "Employee not found");
     }
