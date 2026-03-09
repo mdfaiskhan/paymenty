@@ -67,6 +67,17 @@ function currentPeriodBounds() {
   };
 }
 
+function clampTrendRange(start, end, maxDays = 31) {
+  const safeStart = utcStartOfDay(start);
+  const safeEnd = utcEndOfDay(end);
+  const diffDays = Math.floor((safeEnd.getTime() - safeStart.getTime()) / 86400000) + 1;
+  if (diffDays <= maxDays) {
+    return { start: safeStart, end: safeEnd };
+  }
+  const clampedStart = utcStartOfDay(addDays(safeEnd, -(maxDays - 1)));
+  return { start: clampedStart, end: safeEnd };
+}
+
 function ruleLookupStages(businessTypeExpr) {
   return [
     {
@@ -158,12 +169,50 @@ function emptyWindow() {
   return { hours: 0, total: 0 };
 }
 
-async function getBusinessAnalytics(businessType) {
-  const cacheKey = String(businessType);
+async function getBusinessAnalytics(businessType, options = {}) {
+  const normalizedStartDate = options.startDate ? String(options.startDate) : "";
+  const normalizedEndDate = options.endDate ? String(options.endDate) : "";
+  const cacheKey = `${String(businessType)}:${normalizedStartDate}:${normalizedEndDate}`;
   const now = Date.now();
   const cached = analyticsCache.get(cacheKey);
 
   if (cached && cached.payload && cached.expiresAt > now) {
+    return cached.payload;
+  }
+
+  // Stale-while-revalidate: return last known payload instantly while recomputing in background.
+  if (cached && cached.payload && cached.expiresAt <= now) {
+    if (!cached.inFlight) {
+      const inFlight = (async () => {
+        const payload = await computeBusinessAnalytics(businessType, {
+          startDate: normalizedStartDate || undefined,
+          endDate: normalizedEndDate || undefined
+        });
+        analyticsCache.set(cacheKey, {
+          payload,
+          expiresAt: Date.now() + ANALYTICS_CACHE_TTL_MS,
+          inFlight: null
+        });
+        return payload;
+      })();
+
+      analyticsCache.set(cacheKey, {
+        payload: cached.payload,
+        expiresAt: cached.expiresAt,
+        inFlight
+      });
+
+      inFlight.catch(() => {
+        const current = analyticsCache.get(cacheKey);
+        if (current && current.inFlight === inFlight) {
+          analyticsCache.set(cacheKey, {
+            payload: current.payload,
+            expiresAt: Date.now() + Math.floor(ANALYTICS_CACHE_TTL_MS / 2),
+            inFlight: null
+          });
+        }
+      });
+    }
     return cached.payload;
   }
 
@@ -172,7 +221,10 @@ async function getBusinessAnalytics(businessType) {
   }
 
   const inFlight = (async () => {
-    const payload = await computeBusinessAnalytics(businessType);
+    const payload = await computeBusinessAnalytics(businessType, {
+      startDate: normalizedStartDate || undefined,
+      endDate: normalizedEndDate || undefined
+    });
     analyticsCache.set(cacheKey, {
       payload,
       expiresAt: Date.now() + ANALYTICS_CACHE_TTL_MS,
@@ -195,18 +247,28 @@ async function getBusinessAnalytics(businessType) {
   }
 }
 
-async function computeBusinessAnalytics(businessType) {
+async function computeBusinessAnalytics(businessType, options = {}) {
   const business = await Business.findOne({ slug: businessType, isActive: true }).lean();
   if (!business) {
     throw new ApiError(404, "Business not found");
   }
 
   const bounds = currentPeriodBounds();
+  const hasCustomRange = Boolean(options.startDate && options.endDate);
+  const customRange = hasCustomRange ? parseDateOnlyToUtcBounds(options.startDate, options.endDate) : null;
+  const rangeStart = customRange ? customRange.start : bounds.monthStart;
+  const rangeEnd = customRange ? customRange.end : bounds.monthEnd;
+  const trendWindow = hasCustomRange
+    ? clampTrendRange(rangeStart, rangeEnd)
+    : { start: bounds.trendStart, end: bounds.trendEnd };
   const analysisStart = bounds.trendStart < bounds.monthStart ? bounds.trendStart : bounds.monthStart;
+  const queryStartBase = rangeStart < analysisStart ? rangeStart : analysisStart;
+  const queryStart = trendWindow.start < queryStartBase ? trendWindow.start : queryStartBase;
+  const queryEnd = rangeEnd > bounds.monthEnd ? rangeEnd : bounds.monthEnd;
 
-  const [employees, monthDaily] = await Promise.all([
+  const [employees, aggregateDaily] = await Promise.all([
     Employee.find({ businessType, isActive: true }).sort({ createdAt: -1 }).lean(),
-    aggregateEmployeeDaily(businessType, analysisStart, bounds.monthEnd, business.calcType)
+    aggregateEmployeeDaily(businessType, queryStart, queryEnd, business.calcType)
   ]);
 
   const employeeBreakdown = new Map(
@@ -222,14 +284,14 @@ async function computeBusinessAnalytics(businessType) {
         yesterday: emptyWindow(),
         today: emptyWindow(),
         week: emptyWindow(),
-        month: emptyWindow()
+        month: emptyWindow(),
+        range: emptyWindow()
       }
     ])
   );
 
   const trendMap = new Map();
-  for (let i = 0; i < 7; i += 1) {
-    const d = addDays(bounds.trendStart, i);
+  for (let d = new Date(trendWindow.start); d <= trendWindow.end; d = addDays(d, 1)) {
     trendMap.set(dateKey(d), 0);
   }
 
@@ -237,10 +299,11 @@ async function computeBusinessAnalytics(businessType) {
     yesterday: { totalHours: 0, totalEarningsOrCuts: 0 },
     today: { totalHours: 0, totalEarningsOrCuts: 0 },
     week: { totalHours: 0, totalEarningsOrCuts: 0 },
-    month: { totalHours: 0, totalEarningsOrCuts: 0 }
+    month: { totalHours: 0, totalEarningsOrCuts: 0 },
+    range: { totalHours: 0, totalEarningsOrCuts: 0 }
   };
 
-  monthDaily.forEach((row) => {
+  aggregateDaily.forEach((row) => {
     const key = String(row.employeeId);
     if (!employeeBreakdown.has(key)) {
       return;
@@ -277,9 +340,16 @@ async function computeBusinessAnalytics(businessType) {
       summary.today.totalEarningsOrCuts += total;
     }
 
-    if (d >= bounds.trendStart && d <= bounds.trendEnd) {
+    if (d >= trendWindow.start && d <= trendWindow.end) {
       const dk = dateKey(d);
       trendMap.set(dk, (trendMap.get(dk) || 0) + total);
+    }
+
+    if (d >= rangeStart && d <= rangeEnd) {
+      breakdown.range.hours += hours;
+      breakdown.range.total += total;
+      summary.range.totalHours += hours;
+      summary.range.totalEarningsOrCuts += total;
     }
   });
 
@@ -296,6 +366,12 @@ async function computeBusinessAnalytics(businessType) {
     today: summary.today,
     week: summary.week,
     month: summary.month,
+    range: summary.range,
+    selectedRange: {
+      startDate: dateKey(rangeStart),
+      endDate: dateKey(rangeEnd),
+      mode: hasCustomRange ? "custom" : "month"
+    },
     dailyTrend,
     employeeBreakdown: Array.from(employeeBreakdown.values())
   };
@@ -306,7 +382,12 @@ function invalidateBusinessAnalyticsCache(businessType) {
     analyticsCache.clear();
     return;
   }
-  analyticsCache.delete(String(businessType));
+  const prefix = `${String(businessType)}:`;
+  Array.from(analyticsCache.keys()).forEach((key) => {
+    if (key === String(businessType) || key.startsWith(prefix)) {
+      analyticsCache.delete(key);
+    }
+  });
 }
 
 function parseDateOnlyToUtcBounds(startDate, endDate) {

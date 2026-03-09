@@ -16,7 +16,7 @@ import {
   updateEmployeeApi,
   updateWorkApi
 } from "../api/businessApi";
-import { getCurrentMonth, monthOptions, todayDateOnly } from "../utils/date";
+import { firstDayOfCurrentMonth, getCurrentMonth, monthOptions, todayDateOnly } from "../utils/date";
 import { downloadCsv } from "../utils/csv";
 import { useAnalytics } from "../context/AnalyticsContext";
 import { useBusinesses } from "../context/BusinessContext";
@@ -28,7 +28,8 @@ export default function BusinessDashboardPage() {
     analyticsData,
     loading,
     error,
-    refreshAnalytics
+    refreshAnalytics,
+    activeRange
   } = useAnalytics();
   const { businesses } = useBusinesses();
 
@@ -45,6 +46,8 @@ export default function BusinessDashboardPage() {
   const [historyDay, setHistoryDay] = useState(todayDateOnly());
   const [historyStartDate, setHistoryStartDate] = useState(todayDateOnly());
   const [historyEndDate, setHistoryEndDate] = useState(todayDateOnly());
+  const [rangeStartDate, setRangeStartDate] = useState(firstDayOfCurrentMonth());
+  const [rangeEndDate, setRangeEndDate] = useState(todayDateOnly());
   const historyMonthChoices = useMemo(() => monthOptions(12, 0), []);
 
   useEffect(() => {
@@ -52,6 +55,11 @@ export default function BusinessDashboardPage() {
       setSelectedBusiness(businessType);
     }
   }, [businessType, setSelectedBusiness]);
+
+  useEffect(() => {
+    setRangeStartDate(activeRange?.startDate || firstDayOfCurrentMonth());
+    setRangeEndDate(activeRange?.endDate || todayDateOnly());
+  }, [activeRange?.startDate, activeRange?.endDate]);
 
   const rows = analyticsData?.employeeBreakdown || [];
   const activeBusiness = businesses.find((b) => b.slug === businessType);
@@ -87,6 +95,7 @@ export default function BusinessDashboardPage() {
     const num = (v) => Number(v) || 0;
     const rangeTotal = (row) => {
       if (sortRange === "yesterday") return num(row.yesterday?.total);
+      if (sortRange === "range") return num(row.range?.total);
       return num(row.month?.total);
     };
 
@@ -111,19 +120,31 @@ export default function BusinessDashboardPage() {
 
   async function addEmployee(payload) {
     await createEmployeeApi(payload);
-    await refreshAnalytics(businessType);
+    await refreshAnalytics({
+      businessType,
+      startDate: activeRange?.startDate,
+      endDate: activeRange?.endDate
+    });
   }
 
   async function saveEmployeeEdit(payload) {
     await updateEmployeeApi(editEmployee.employeeId, payload);
     setEditEmployee(null);
-    await refreshAnalytics(businessType);
+    await refreshAnalytics({
+      businessType,
+      startDate: activeRange?.startDate,
+      endDate: activeRange?.endDate
+    });
   }
 
   async function addHours(payload) {
     await addWorkApi(payload);
     setAddHoursEmployee(null);
-    await refreshAnalytics(businessType);
+    await refreshAnalytics({
+      businessType,
+      startDate: activeRange?.startDate,
+      endDate: activeRange?.endDate
+    });
   }
 
   async function removeEmployee(employee) {
@@ -132,7 +153,11 @@ export default function BusinessDashboardPage() {
       return;
     }
     await deleteEmployeeApi(employee.employeeId);
-    await refreshAnalytics(businessType);
+    await refreshAnalytics({
+      businessType,
+      startDate: activeRange?.startDate,
+      endDate: activeRange?.endDate
+    });
   }
 
   async function openHistory(employee) {
@@ -232,7 +257,11 @@ export default function BusinessDashboardPage() {
       });
       setHistoryRows(result.days || []);
     }
-    await refreshAnalytics(businessType);
+    await refreshAnalytics({
+      businessType,
+      startDate: activeRange?.startDate,
+      endDate: activeRange?.endDate
+    });
   }
 
   async function deleteHistoryEntry(entryId) {
@@ -246,7 +275,11 @@ export default function BusinessDashboardPage() {
       });
       setHistoryRows(result.days || []);
     }
-    await refreshAnalytics(businessType);
+    await refreshAnalytics({
+      businessType,
+      startDate: activeRange?.startDate,
+      endDate: activeRange?.endDate
+    });
   }
 
   function exportEmployeesCsv() {
@@ -254,15 +287,54 @@ export default function BusinessDashboardPage() {
       name: row.name,
       yesterdayHours: row.yesterday?.hours || 0,
       yesterdayTotal: row.yesterday?.total || 0,
+      rangeHours: row.range?.hours || 0,
+      rangeTotal: row.range?.total || 0,
       monthHours: row.month.hours,
       monthTotal: row.month.total
     }));
     downloadCsv(
       `${businessType}-analytics.csv`,
-      ["name", "yesterdayHours", "yesterdayTotal", "monthHours", "monthTotal"],
+      ["name", "yesterdayHours", "yesterdayTotal", "rangeHours", "rangeTotal", "monthHours", "monthTotal"],
       csvRows
     );
   }
+
+  async function resetRangeToMonth() {
+    const start = firstDayOfCurrentMonth();
+    const end = todayDateOnly();
+    setRangeStartDate(start);
+    setRangeEndDate(end);
+    await refreshAnalytics({
+      businessType,
+      startDate: "",
+      endDate: ""
+    });
+  }
+
+  const selectedRangeLabel = analyticsData?.selectedRange
+    ? `${analyticsData.selectedRange.startDate} to ${analyticsData.selectedRange.endDate}`
+    : "Selected Range";
+  const metricRangeLabel = analyticsData?.selectedRange
+    ? `Range (${analyticsData.selectedRange.startDate.slice(5)} to ${analyticsData.selectedRange.endDate.slice(5)})`
+    : "Range";
+
+  function onSortRangeChange(next) {
+    setSortRange(next);
+  }
+
+  useEffect(() => {
+    if (sortRange !== "range") {
+      return;
+    }
+    if (!rangeStartDate || !rangeEndDate || rangeStartDate > rangeEndDate) {
+      return;
+    }
+    refreshAnalytics({
+      businessType,
+      startDate: rangeStartDate,
+      endDate: rangeEndDate
+    });
+  }, [sortRange, rangeStartDate, rangeEndDate, businessType]);
 
   return (
     <section>
@@ -283,10 +355,16 @@ export default function BusinessDashboardPage() {
             <option value="nameAsc">Name: A to Z</option>
             <option value="nameDesc">Name: Z to A</option>
           </select>
-          <select value={sortRange} onChange={(e) => setSortRange(e.target.value)}>
+          <select value={sortRange} onChange={(e) => onSortRangeChange(e.target.value)}>
             <option value="yesterday">Yesterday</option>
             <option value="month">This Month</option>
+            <option value="range">Range</option>
           </select>
+          <input type="date" value={rangeStartDate} onChange={(e) => setRangeStartDate(e.target.value)} />
+          <input type="date" value={rangeEndDate} onChange={(e) => setRangeEndDate(e.target.value)} />
+          <button className="button ghost" type="button" onClick={resetRangeToMonth}>
+            This Month
+          </button>
           <button className="button ghost" onClick={exportEmployeesCsv} type="button">
             Export CSV
           </button>
@@ -294,7 +372,7 @@ export default function BusinessDashboardPage() {
       </header>
 
       {error ? <p className="error-text">{error}</p> : null}
-      {loading ? <p className="card">Loading analytics...</p> : null}
+      {loading && !analyticsData ? <p className="card">Loading analytics...</p> : null}
 
       <EmployeeTable
         unit={unit}
@@ -305,8 +383,13 @@ export default function BusinessDashboardPage() {
         onDelete={removeEmployee}
       />
 
-      <TrendChart unit={unit} dailyTrend={analyticsData?.dailyTrend || []} />
-      <MetricCards analytics={analyticsData} />
+      <MetricCards analytics={analyticsData} rangeLabel={metricRangeLabel} />
+      <TrendChart
+        unit={unit}
+        dailyTrend={analyticsData?.dailyTrend || []}
+        businessName={pageTitle}
+        subtitle={`Business: ${pageTitle} | Range: ${selectedRangeLabel}`}
+      />
 
       <article className="card section-card">
         <h3>Add Employee</h3>

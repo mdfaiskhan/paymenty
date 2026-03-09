@@ -63,9 +63,12 @@ export async function getWorkHistoryApi(employeeId, params = {}) {
   return data;
 }
 
-export async function getAnalyticsApi(businessType) {
+export async function getAnalyticsApi(businessType, params = {}) {
   const { data } = await apiClient.get(`/api/analytics/${businessType}`, {
-    params: {}
+    params: {
+      startDate: params.startDate || undefined,
+      endDate: params.endDate || undefined
+    }
   });
   return data;
 }

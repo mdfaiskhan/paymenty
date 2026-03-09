@@ -37,6 +37,8 @@ export default function EmployeeTable({
             <th>Name</th>
             <th>Yesterday Hours</th>
             <th>Yesterday {metricHeader}</th>
+            <th>Range Hours</th>
+            <th>Range {metricHeader}</th>
             <th>Month Hours</th>
             <th>Month {metricHeader}</th>
             <th>Actions</th>
@@ -53,6 +55,8 @@ export default function EmployeeTable({
               </td>
               <td data-label="Yesterday Hours">{formatHours(row.yesterday?.hours)}</td>
               <td data-label={`Yesterday ${metricHeader}`}>{metricValue(row.yesterday)}</td>
+              <td data-label="Range Hours">{formatHours(row.range?.hours)}</td>
+              <td data-label={`Range ${metricHeader}`}>{metricValue(row.range)}</td>
               <td data-label="Month Hours">{formatHours(row.month?.hours)}</td>
               <td data-label={`Month ${metricHeader}`}>{metricValue(row.month)}</td>
               <td data-label="Actions">
