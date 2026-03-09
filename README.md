@@ -38,6 +38,8 @@ Full-stack contributor payment engine for Tailor and Butcher businesses.
    - `npm run dev`
 
 ## Render Deployment
+This repo includes `render.yaml` so Render can apply consistent backend/frontend setup, including SPA rewrites for React routes on refresh.
+
 ### Backend service (`paymenty-backend`)
 - Root directory: `backend`
 - Build command: `npm install`
@@ -55,6 +57,8 @@ Full-stack contributor payment engine for Tailor and Butcher businesses.
 - Publish directory: `dist`
 - Environment variable:
   - `VITE_API_BASE_URL=https://paymenty-backend.onrender.com`
+- Rewrites:
+  - `/* -> /index.html` (already defined in `render.yaml`; required to avoid "file not found" on page refresh)
 
 Notes:
 - Frontend code has fallback logic for API URL:

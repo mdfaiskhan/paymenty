@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: paymenty-backend
+    env: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: OWNER_MODULE_PASSWORD
+        sync: false
+
+  - type: static_site
+    name: paymenty-frontend
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    publishDir: dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://paymenty-backend.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

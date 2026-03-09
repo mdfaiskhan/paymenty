@@ -5,9 +5,17 @@ const LOCAL_API_URL = "http://localhost:5000";
 const RENDER_API_URL = "https://paymenty-backend.onrender.com";
 
 function resolveApiBaseUrl() {
+  const isLocalRuntime = typeof window !== "undefined"
+    ? window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+    : true;
+
   // Highest priority: explicit environment variable
   const envUrl = String(import.meta.env.VITE_API_BASE_URL || "").trim();
   if (envUrl) {
+    // Guard against accidental production misconfiguration like localhost on Render.
+    if (!isLocalRuntime && /localhost|127\.0\.0\.1/i.test(envUrl)) {
+      return RENDER_API_URL;
+    }
     return envUrl;
   }
 
@@ -15,9 +23,7 @@ function resolveApiBaseUrl() {
   // - local frontend => local backend
   // - deployed frontend => Render backend
   if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    const isLocalhost = host === "localhost" || host === "127.0.0.1";
-    return isLocalhost ? LOCAL_API_URL : RENDER_API_URL;
+    return isLocalRuntime ? LOCAL_API_URL : RENDER_API_URL;
   }
 
   return LOCAL_API_URL;
