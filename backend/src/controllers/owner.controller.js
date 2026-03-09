@@ -1,5 +1,6 @@
 const Owner = require("../models/Owner.model");
 const ApiError = require("../utils/ApiError");
+const { getBusinessBySlug, toSlug } = require("../services/business.service");
 const {
   getOwnersWithCurrentCommission,
   createOwnerWithRule,
@@ -30,7 +31,12 @@ async function listOwners(req, res, next) {
 async function updateOwner(req, res, next) {
   try {
     const { id } = req.validated.params;
-    const row = await Owner.findOneAndUpdate({ _id: id, isActive: true }, req.validated.body, { new: true });
+    const payload = { ...req.validated.body };
+    if (payload.businessType) {
+      payload.businessType = toSlug(payload.businessType);
+      await getBusinessBySlug(payload.businessType);
+    }
+    const row = await Owner.findOneAndUpdate({ _id: id, isActive: true }, payload, { new: true });
     if (!row) {
       throw new ApiError(404, "Owner not found");
     }

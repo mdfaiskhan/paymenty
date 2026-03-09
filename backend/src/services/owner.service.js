@@ -3,6 +3,7 @@ const OwnerCommissionRule = require("../models/OwnerCommissionRule.model");
 const OwnerDailyHours = require("../models/OwnerDailyHours.model");
 const ApiError = require("../utils/ApiError");
 const { parseYyyyMmDd } = require("../utils/date");
+const { getBusinessBySlug, toSlug } = require("./business.service");
 
 function utcStartOfDay(date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -111,7 +112,7 @@ function commissionForDate(rules, date) {
 async function getOwnersWithCurrentCommission({ businessType, search, ownerId } = {}) {
   const filter = { isActive: true };
   if (businessType) {
-    filter.businessType = businessType;
+    filter.businessType = toSlug(businessType);
   }
   if (ownerId) {
     filter._id = ownerId;
@@ -148,6 +149,8 @@ async function getOwnersWithCurrentCommission({ businessType, search, ownerId } 
 }
 
 async function createOwnerWithRule(payload) {
+  const normalizedBusinessType = toSlug(payload.businessType);
+  await getBusinessBySlug(normalizedBusinessType);
   const effectiveFrom = payload.effectiveFrom ? parseYyyyMmDd(payload.effectiveFrom) : utcStartOfDay(new Date());
   if (!effectiveFrom) {
     throw new ApiError(400, "Invalid effectiveFrom");
@@ -156,7 +159,7 @@ async function createOwnerWithRule(payload) {
   const owner = await Owner.create({
     name: payload.name,
     phone: payload.phone,
-    businessType: payload.businessType,
+    businessType: normalizedBusinessType,
     workerCount: payload.workerCount
   });
 

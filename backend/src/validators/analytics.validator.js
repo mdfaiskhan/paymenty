@@ -5,7 +5,8 @@ const analyticsSchema = z.object({
   query: z
     .object({
       startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD").optional(),
-      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD").optional()
+      endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD").optional(),
+      _t: z.string().optional()
     })
     .superRefine((query, ctx) => {
       const hasStart = Boolean(query.startDate);

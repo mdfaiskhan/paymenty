@@ -10,7 +10,34 @@ const {
 } = require("./payout.service");
 
 const ANALYTICS_CACHE_TTL_MS = Number(process.env.ANALYTICS_CACHE_TTL_MS || 15000);
+const MAX_ANALYTICS_CACHE_ENTRIES = Number(process.env.MAX_ANALYTICS_CACHE_ENTRIES || 300);
+const ANALYTICS_CACHE_SCHEMA_VERSION = "v3";
 const analyticsCache = new Map();
+
+function setAnalyticsCache(key, value) {
+  if (analyticsCache.has(key)) {
+    analyticsCache.delete(key);
+  }
+  analyticsCache.set(key, value);
+  while (analyticsCache.size > MAX_ANALYTICS_CACHE_ENTRIES) {
+    const oldestKey = analyticsCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    analyticsCache.delete(oldestKey);
+  }
+}
+
+function getAnalyticsCache(key) {
+  const value = analyticsCache.get(key);
+  if (!value) {
+    return null;
+  }
+  // Touch key for LRU behavior.
+  analyticsCache.delete(key);
+  analyticsCache.set(key, value);
+  return value;
+}
 
 function utcStartOfDay(date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -141,7 +168,7 @@ async function aggregateEmployeeDaily(businessType, start, end, calcType) {
     {
       $match: {
         businessType,
-        isDeleted: false,
+        isDeleted: { $ne: true },
         workDate: { $gte: start, $lte: end }
       }
     },
@@ -165,16 +192,58 @@ async function aggregateEmployeeDaily(businessType, start, end, calcType) {
   ]);
 }
 
+async function aggregateEmployeeDailyByEmployees(employeeIds, businessType, start, end, calcType) {
+  if (!employeeIds.length) {
+    return [];
+  }
+
+  return WorkEntry.aggregate([
+    {
+      $match: {
+        employeeId: { $in: employeeIds },
+        isDeleted: { $ne: true },
+        workDate: { $gte: start, $lte: end }
+      }
+    },
+    {
+      $group: {
+        _id: { employeeId: "$employeeId", workDate: "$workDate" },
+        dayHours: { $sum: "$hours" }
+      }
+    },
+    // Use current business rules/calcType for legacy rows that may have missing/wrong businessType.
+    ...ruleLookupStages(businessType),
+    metricStage(calcType),
+    {
+      $project: {
+        _id: 0,
+        employeeId: "$_id.employeeId",
+        workDate: "$_id.workDate",
+        dayHours: 1,
+        dayTotal: 1
+      }
+    }
+  ]);
+}
+
 function emptyWindow() {
   return { hours: 0, total: 0 };
+}
+
+function buildDateSeries(start, end) {
+  const dates = [];
+  for (let d = utcStartOfDay(start); d <= end; d = addDays(d, 1)) {
+    dates.push(dateKey(d));
+  }
+  return dates;
 }
 
 async function getBusinessAnalytics(businessType, options = {}) {
   const normalizedStartDate = options.startDate ? String(options.startDate) : "";
   const normalizedEndDate = options.endDate ? String(options.endDate) : "";
-  const cacheKey = `${String(businessType)}:${normalizedStartDate}:${normalizedEndDate}`;
+  const cacheKey = `${ANALYTICS_CACHE_SCHEMA_VERSION}:${String(businessType)}:${normalizedStartDate}:${normalizedEndDate}`;
   const now = Date.now();
-  const cached = analyticsCache.get(cacheKey);
+  const cached = getAnalyticsCache(cacheKey);
 
   if (cached && cached.payload && cached.expiresAt > now) {
     return cached.payload;
@@ -188,7 +257,7 @@ async function getBusinessAnalytics(businessType, options = {}) {
           startDate: normalizedStartDate || undefined,
           endDate: normalizedEndDate || undefined
         });
-        analyticsCache.set(cacheKey, {
+        setAnalyticsCache(cacheKey, {
           payload,
           expiresAt: Date.now() + ANALYTICS_CACHE_TTL_MS,
           inFlight: null
@@ -196,7 +265,7 @@ async function getBusinessAnalytics(businessType, options = {}) {
         return payload;
       })();
 
-      analyticsCache.set(cacheKey, {
+      setAnalyticsCache(cacheKey, {
         payload: cached.payload,
         expiresAt: cached.expiresAt,
         inFlight
@@ -205,7 +274,7 @@ async function getBusinessAnalytics(businessType, options = {}) {
       inFlight.catch(() => {
         const current = analyticsCache.get(cacheKey);
         if (current && current.inFlight === inFlight) {
-          analyticsCache.set(cacheKey, {
+          setAnalyticsCache(cacheKey, {
             payload: current.payload,
             expiresAt: Date.now() + Math.floor(ANALYTICS_CACHE_TTL_MS / 2),
             inFlight: null
@@ -225,7 +294,7 @@ async function getBusinessAnalytics(businessType, options = {}) {
       startDate: normalizedStartDate || undefined,
       endDate: normalizedEndDate || undefined
     });
-    analyticsCache.set(cacheKey, {
+    setAnalyticsCache(cacheKey, {
       payload,
       expiresAt: Date.now() + ANALYTICS_CACHE_TTL_MS,
       inFlight: null
@@ -233,7 +302,7 @@ async function getBusinessAnalytics(businessType, options = {}) {
     return payload;
   })();
 
-  analyticsCache.set(cacheKey, {
+  setAnalyticsCache(cacheKey, {
     payload: cached?.payload || null,
     expiresAt: cached?.expiresAt || 0,
     inFlight
@@ -262,14 +331,23 @@ async function computeBusinessAnalytics(businessType, options = {}) {
     ? clampTrendRange(rangeStart, rangeEnd)
     : { start: bounds.trendStart, end: bounds.trendEnd };
   const analysisStart = bounds.trendStart < bounds.monthStart ? bounds.trendStart : bounds.monthStart;
-  const queryStartBase = rangeStart < analysisStart ? rangeStart : analysisStart;
-  const queryStart = trendWindow.start < queryStartBase ? trendWindow.start : queryStartBase;
-  const queryEnd = rangeEnd > bounds.monthEnd ? rangeEnd : bounds.monthEnd;
 
-  const [employees, aggregateDaily] = await Promise.all([
+  const [employees, windowRows, customRangeRows] = await Promise.all([
     Employee.find({ businessType, isActive: true }).sort({ createdAt: -1 }).lean(),
-    aggregateEmployeeDaily(businessType, queryStart, queryEnd, business.calcType)
+    aggregateEmployeeDaily(businessType, analysisStart, bounds.monthEnd, business.calcType),
+    hasCustomRange
+      ? aggregateEmployeeDaily(businessType, rangeStart, rangeEnd, business.calcType)
+      : Promise.resolve(null)
   ]);
+  const totalEnd = hasCustomRange ? rangeEnd : bounds.todayEnd;
+  const totalRows = await aggregateEmployeeDailyByEmployees(
+    employees.map((emp) => emp._id),
+    businessType,
+    new Date(Date.UTC(1970, 0, 1)),
+    totalEnd,
+    business.calcType
+  );
+  const rangeRows = hasCustomRange ? customRangeRows || [] : windowRows;
 
   const employeeBreakdown = new Map(
     employees.map((emp) => [
@@ -285,7 +363,9 @@ async function computeBusinessAnalytics(businessType, options = {}) {
         today: emptyWindow(),
         week: emptyWindow(),
         month: emptyWindow(),
-        range: emptyWindow()
+        range: emptyWindow(),
+        total: emptyWindow(),
+        rangeDaily: {}
       }
     ])
   );
@@ -300,10 +380,11 @@ async function computeBusinessAnalytics(businessType, options = {}) {
     today: { totalHours: 0, totalEarningsOrCuts: 0 },
     week: { totalHours: 0, totalEarningsOrCuts: 0 },
     month: { totalHours: 0, totalEarningsOrCuts: 0 },
-    range: { totalHours: 0, totalEarningsOrCuts: 0 }
+    range: { totalHours: 0, totalEarningsOrCuts: 0 },
+    total: { totalHours: 0, totalEarningsOrCuts: 0 }
   };
 
-  aggregateDaily.forEach((row) => {
+  windowRows.forEach((row) => {
     const key = String(row.employeeId);
     if (!employeeBreakdown.has(key)) {
       return;
@@ -340,17 +421,67 @@ async function computeBusinessAnalytics(businessType, options = {}) {
       summary.today.totalEarningsOrCuts += total;
     }
 
-    if (d >= trendWindow.start && d <= trendWindow.end) {
+    if (!hasCustomRange && d >= trendWindow.start && d <= trendWindow.end) {
       const dk = dateKey(d);
       trendMap.set(dk, (trendMap.get(dk) || 0) + total);
     }
+  });
+
+  rangeRows.forEach((row) => {
+    const key = String(row.employeeId);
+    if (!employeeBreakdown.has(key)) {
+      return;
+    }
+
+    const d = new Date(row.workDate);
+    const dk = dateKey(d);
+    const breakdown = employeeBreakdown.get(key);
+    const hours = Number(row.dayHours) || 0;
+    const total = Number(row.dayTotal) || 0;
 
     if (d >= rangeStart && d <= rangeEnd) {
       breakdown.range.hours += hours;
       breakdown.range.total += total;
+      breakdown.rangeDaily[dk] = (Number(breakdown.rangeDaily[dk]) || 0) + total;
       summary.range.totalHours += hours;
       summary.range.totalEarningsOrCuts += total;
     }
+
+    if (hasCustomRange && d >= trendWindow.start && d <= trendWindow.end) {
+      trendMap.set(dk, (trendMap.get(dk) || 0) + total);
+    }
+  });
+
+  if (!hasCustomRange) {
+    summary.range.totalHours = summary.month.totalHours;
+    summary.range.totalEarningsOrCuts = summary.month.totalEarningsOrCuts;
+    const monthDateSet = new Set(buildDateSeries(rangeStart, rangeEnd));
+    employeeBreakdown.forEach((row) => {
+      row.range = { ...row.month };
+      row.rangeDaily = {};
+    });
+    windowRows.forEach((entry) => {
+      const key = String(entry.employeeId);
+      const row = employeeBreakdown.get(key);
+      if (!row) return;
+      const dk = dateKey(entry.workDate);
+      if (!monthDateSet.has(dk)) return;
+      row.rangeDaily[dk] = (Number(row.rangeDaily[dk]) || 0) + (Number(entry.dayTotal) || 0);
+    });
+  }
+
+  totalRows.forEach((row) => {
+    const key = String(row.employeeId);
+    if (!employeeBreakdown.has(key)) {
+      return;
+    }
+    const breakdown = employeeBreakdown.get(key);
+    const hours = Number(row.dayHours) || 0;
+    const total = Number(row.dayTotal) || 0;
+    breakdown.total.hours += hours;
+    breakdown.total.total += total;
+    summary.total.totalHours += hours;
+    summary.total.totalEarningsOrCuts += total;
   });
 
   const dailyTrend = Array.from(trendMap.entries())
@@ -367,11 +498,13 @@ async function computeBusinessAnalytics(businessType, options = {}) {
     week: summary.week,
     month: summary.month,
     range: summary.range,
+    total: summary.total,
     selectedRange: {
       startDate: dateKey(rangeStart),
       endDate: dateKey(rangeEnd),
       mode: hasCustomRange ? "custom" : "month"
     },
+    rangeDates: buildDateSeries(rangeStart, rangeEnd),
     dailyTrend,
     employeeBreakdown: Array.from(employeeBreakdown.values())
   };
@@ -417,7 +550,7 @@ async function getEmployeeWorkHistory(employeeId, query) {
     {
       $match: {
         employeeId: employeeObjectId,
-        isDeleted: false,
+        isDeleted: { $ne: true },
         workDate: { $gte: start, $lte: end }
       }
     },

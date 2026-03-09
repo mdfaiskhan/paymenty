@@ -20,6 +20,7 @@ import { firstDayOfCurrentMonth, getCurrentMonth, monthOptions, todayDateOnly } 
 import { downloadCsv } from "../utils/csv";
 import { useAnalytics } from "../context/AnalyticsContext";
 import { useBusinesses } from "../context/BusinessContext";
+import { formatTwoDecimals, toFiniteNumber } from "../utils/number";
 
 export default function BusinessDashboardPage() {
   const { businessType } = useParams();
@@ -35,15 +36,14 @@ export default function BusinessDashboardPage() {
 
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("amountDesc");
-  const [sortRange, setSortRange] = useState("month");
+  const [sortRange, setSortRange] = useState("total");
   const [addHoursEmployee, setAddHoursEmployee] = useState(null);
   const [historyEmployee, setHistoryEmployee] = useState(null);
   const [editEmployee, setEditEmployee] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyRows, setHistoryRows] = useState([]);
-  const [historyMode, setHistoryMode] = useState("day");
+  const [historyMode, setHistoryMode] = useState("month");
   const [historyMonth, setHistoryMonth] = useState(getCurrentMonth());
-  const [historyDay, setHistoryDay] = useState(todayDateOnly());
   const [historyStartDate, setHistoryStartDate] = useState(todayDateOnly());
   const [historyEndDate, setHistoryEndDate] = useState(todayDateOnly());
   const [rangeStartDate, setRangeStartDate] = useState(firstDayOfCurrentMonth());
@@ -96,6 +96,7 @@ export default function BusinessDashboardPage() {
     const rangeTotal = (row) => {
       if (sortRange === "yesterday") return num(row.yesterday?.total);
       if (sortRange === "range") return num(row.range?.total);
+      if (sortRange === "total") return num(row.total?.total);
       return num(row.month?.total);
     };
 
@@ -163,16 +164,12 @@ export default function BusinessDashboardPage() {
   async function openHistory(employee) {
     const month = getCurrentMonth();
     const today = todayDateOnly();
-    setHistoryMode("day");
+    setHistoryMode("month");
     setHistoryMonth(month);
-    setHistoryDay(today);
     setHistoryStartDate(today);
     setHistoryEndDate(today);
     setHistoryEmployee(employee);
-    const result = await getWorkHistoryApi(employee.employeeId, {
-      startDate: today,
-      endDate: today
-    });
+    const result = await getWorkHistoryApi(employee.employeeId, { month });
     setHistoryRows(result.days || []);
     setHistoryOpen(true);
   }
@@ -181,15 +178,9 @@ export default function BusinessDashboardPage() {
     if (mode === "month") {
       return getWorkHistoryApi(employeeId, { month: values.month });
     }
-    if (mode === "range") {
-      return getWorkHistoryApi(employeeId, {
-        startDate: values.startDate,
-        endDate: values.endDate
-      });
-    }
     return getWorkHistoryApi(employeeId, {
-      startDate: values.day,
-      endDate: values.day
+      startDate: values.startDate,
+      endDate: values.endDate
     });
   }
 
@@ -205,7 +196,6 @@ export default function BusinessDashboardPage() {
     setHistoryMode(mode);
     await refreshOpenHistory(mode, {
       month: historyMonth,
-      day: historyDay,
       startDate: historyStartDate,
       endDate: historyEndDate
     });
@@ -215,17 +205,6 @@ export default function BusinessDashboardPage() {
     setHistoryMonth(month);
     await refreshOpenHistory("month", {
       month,
-      day: historyDay,
-      startDate: historyStartDate,
-      endDate: historyEndDate
-    });
-  }
-
-  async function changeHistoryDay(day) {
-    setHistoryDay(day);
-    await refreshOpenHistory("day", {
-      month: historyMonth,
-      day,
       startDate: historyStartDate,
       endDate: historyEndDate
     });
@@ -240,7 +219,6 @@ export default function BusinessDashboardPage() {
     }
     await refreshOpenHistory("range", {
       month: historyMonth,
-      day: historyDay,
       startDate,
       endDate
     });
@@ -251,7 +229,6 @@ export default function BusinessDashboardPage() {
     if (historyEmployee) {
       const result = await loadHistory(historyEmployee.employeeId, historyMode, {
         month: historyMonth,
-        day: historyDay,
         startDate: historyStartDate,
         endDate: historyEndDate
       });
@@ -269,7 +246,6 @@ export default function BusinessDashboardPage() {
     if (historyEmployee) {
       const result = await loadHistory(historyEmployee.employeeId, historyMode, {
         month: historyMonth,
-        day: historyDay,
         startDate: historyStartDate,
         endDate: historyEndDate
       });
@@ -289,12 +265,12 @@ export default function BusinessDashboardPage() {
       yesterdayTotal: row.yesterday?.total || 0,
       rangeHours: row.range?.hours || 0,
       rangeTotal: row.range?.total || 0,
-      monthHours: row.month.hours,
-      monthTotal: row.month.total
+      totalHours: row.total?.hours || 0,
+      totalCutsOrEarnings: row.total?.total || 0
     }));
     downloadCsv(
       `${businessType}-analytics.csv`,
-      ["name", "yesterdayHours", "yesterdayTotal", "rangeHours", "rangeTotal", "monthHours", "monthTotal"],
+      ["name", "yesterdayHours", "yesterdayTotal", "rangeHours", "rangeTotal", "totalHours", "totalCutsOrEarnings"],
       csvRows
     );
   }
@@ -329,12 +305,21 @@ export default function BusinessDashboardPage() {
     if (!rangeStartDate || !rangeEndDate || rangeStartDate > rangeEndDate) {
       return;
     }
-    refreshAnalytics({
-      businessType,
-      startDate: rangeStartDate,
-      endDate: rangeEndDate
-    });
+    const timer = setTimeout(() => {
+      refreshAnalytics({
+        businessType,
+        startDate: rangeStartDate,
+        endDate: rangeEndDate
+      });
+    }, 350);
+    return () => clearTimeout(timer);
   }, [sortRange, rangeStartDate, rangeEndDate, businessType]);
+
+  function formatMetricValue(value) {
+    const n = toFiniteNumber(value, 0);
+    const amount = formatTwoDecimals(n, 0).replace(/\.00$/, "");
+    return unit === "cuts" ? amount : `INR ${amount}`;
+  }
 
   return (
     <section>
@@ -356,22 +341,28 @@ export default function BusinessDashboardPage() {
             <option value="nameDesc">Name: Z to A</option>
           </select>
           <select value={sortRange} onChange={(e) => onSortRangeChange(e.target.value)}>
+            <option value="total">Total</option>
             <option value="yesterday">Yesterday</option>
             <option value="month">This Month</option>
             <option value="range">Range</option>
           </select>
-          <input type="date" value={rangeStartDate} onChange={(e) => setRangeStartDate(e.target.value)} />
-          <input type="date" value={rangeEndDate} onChange={(e) => setRangeEndDate(e.target.value)} />
-          <button className="button ghost" type="button" onClick={resetRangeToMonth}>
-            This Month
-          </button>
+          {sortRange === "range" ? (
+            <>
+              <input type="date" value={rangeStartDate} onChange={(e) => setRangeStartDate(e.target.value)} />
+              <input type="date" value={rangeEndDate} onChange={(e) => setRangeEndDate(e.target.value)} />
+              <button className="button ghost" type="button" onClick={resetRangeToMonth}>
+                This Month
+              </button>
+            </>
+          ) : null}
           <button className="button ghost" onClick={exportEmployeesCsv} type="button">
             Export CSV
           </button>
         </div>
       </header>
 
-      {error ? <p className="error-text">{error}</p> : null}
+      {error && !analyticsData ? <p className="error-text">{error}</p> : null}
+      {error && analyticsData ? <p className="subtext">Showing cached data. Latest refresh failed.</p> : null}
       {loading && !analyticsData ? <p className="card">Loading analytics...</p> : null}
 
       <EmployeeTable
@@ -390,6 +381,45 @@ export default function BusinessDashboardPage() {
         businessName={pageTitle}
         subtitle={`Business: ${pageTitle} | Range: ${selectedRangeLabel}`}
       />
+
+      <article className="card section-card">
+        <h3>Earnings Activity</h3>
+        <div className="table-wrap">
+          <table className="responsive-table ledger-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                {(analyticsData?.rangeDates || []).map((date) => (
+                  <th key={date}>{date.slice(5)}</th>
+                ))}
+                <th>Range Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!sortedRows.length ? (
+                <tr>
+                  <td data-label="Status" colSpan={(analyticsData?.rangeDates?.length || 0) + 2}>
+                    No employee activity found.
+                  </td>
+                </tr>
+              ) : null}
+              {sortedRows.map((row) => (
+                <tr key={row.employeeId}>
+                  <td data-label="Name">
+                    <strong>{row.name}</strong>
+                  </td>
+                  {(analyticsData?.rangeDates || []).map((date) => (
+                    <td key={`${row.employeeId}-${date}`} data-label={date.slice(5)}>
+                      {formatMetricValue(row.rangeDaily?.[date] || 0)}
+                    </td>
+                  ))}
+                  <td data-label="Range Total">{formatMetricValue(row.range?.total || 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </article>
 
       <article className="card section-card">
         <h3>Add Employee</h3>
@@ -443,7 +473,6 @@ export default function BusinessDashboardPage() {
         <div className="filters">
           <label htmlFor="history-mode">View</label>
           <select id="history-mode" value={historyMode} onChange={(e) => changeHistoryMode(e.target.value)}>
-            <option value="day">Daily</option>
             <option value="month">Monthly</option>
             <option value="range">Range</option>
           </select>
@@ -462,18 +491,6 @@ export default function BusinessDashboardPage() {
                   </option>
                 ))}
               </select>
-            </>
-          ) : null}
-
-          {historyMode === "day" ? (
-            <>
-              <label htmlFor="history-day">Date</label>
-              <input
-                id="history-day"
-                type="date"
-                value={historyDay}
-                onChange={(e) => changeHistoryDay(e.target.value)}
-              />
             </>
           ) : null}
 

@@ -19,6 +19,7 @@ import {
   upsertOwnerDailyHoursApi,
   updateOwnerApi
 } from "../api/ownerApi";
+import { useBusinesses } from "../context/BusinessContext";
 
 function formatMoney(v) {
   return formatTwoDecimals(v, 0);
@@ -54,6 +55,17 @@ function buildStatus(computedAmount, paidAmount) {
 }
 
 export default function OwnerExpenditurePage() {
+  const { businesses } = useBusinesses();
+  const businessOptions = useMemo(
+    () =>
+      businesses.length
+        ? businesses
+        : [
+            { slug: "tailor", name: "Tailor" },
+            { slug: "butcher", name: "Butcher" }
+          ],
+    [businesses]
+  );
   const [gatePassword, setGatePassword] = useState("");
   const [unlocked, setUnlocked] = useState(
     typeof window !== "undefined" && Boolean(window.sessionStorage.getItem("owner_expenditure_password"))
@@ -67,7 +79,7 @@ export default function OwnerExpenditurePage() {
   const [ownerForm, setOwnerForm] = useState({
     name: "",
     phone: "",
-    businessType: "tailor",
+    businessType: "",
     workerCount: 0,
     commissionPerHour: 0
   });
@@ -98,8 +110,7 @@ export default function OwnerExpenditurePage() {
   });
   const [ownerSettlementRows, setOwnerSettlementRows] = useState([]);
   const [businessSettlement, setBusinessSettlement] = useState({
-    tailorEarned: 0,
-    butcherEarned: 0,
+    items: [],
     totalEarned: 0
   });
   const [recordOwnerPayment, setRecordOwnerPayment] = useState(null);
@@ -125,22 +136,29 @@ export default function OwnerExpenditurePage() {
     setLoading(true);
     setError("");
     try {
-      const [data, settlementSummary, settlementRows, tailorSummary, butcherSummary] = await Promise.all([
+      const businessSummaries = await Promise.all(
+        businessOptions.map(async (business) => ({
+          business,
+          summary: await getPaymentsSummaryApi({ businessType: business.slug, rangeType: "month" })
+        }))
+      );
+
+      const [data, settlementSummary, settlementRows] = await Promise.all([
         getOwnersAnalyticsApi(),
         getOwnerPaymentsSummaryApi({ rangeType: "month" }),
-        getOwnerPaymentsApi({ rangeType: "month" }),
-        getPaymentsSummaryApi({ businessType: "tailor", rangeType: "month" }),
-        getPaymentsSummaryApi({ businessType: "butcher", rangeType: "month" })
+        getOwnerPaymentsApi({ rangeType: "month" })
       ]);
       setAnalytics(data);
       setOwnerSettlement(settlementSummary);
       setOwnerSettlementRows(settlementRows.rows || []);
-      const tailorEarned = Number(tailorSummary?.totalEarned) || 0;
-      const butcherEarned = Number(butcherSummary?.totalEarned) || 0;
+      const items = businessSummaries.map((row) => ({
+        businessType: row.business.slug,
+        businessName: row.business.name,
+        earned: Number(row.summary?.totalEarned) || 0
+      }));
       setBusinessSettlement({
-        tailorEarned,
-        butcherEarned,
-        totalEarned: tailorEarned + butcherEarned
+        items,
+        totalEarned: items.reduce((sum, row) => sum + row.earned, 0)
       });
     } catch (err) {
       setError(err.response?.data?.message || "Failed to load owner analytics");
@@ -153,7 +171,13 @@ export default function OwnerExpenditurePage() {
     if (unlocked) {
       loadAnalytics();
     }
-  }, [unlocked]);
+  }, [unlocked, businessOptions]);
+
+  useEffect(() => {
+    if (!ownerForm.businessType && businessOptions.length) {
+      setOwnerForm((prev) => ({ ...prev, businessType: businessOptions[0].slug }));
+    }
+  }, [businessOptions, ownerForm.businessType]);
 
   useEffect(() => {
     return () => {
@@ -194,7 +218,7 @@ export default function OwnerExpenditurePage() {
     setAnalytics({ cards: {}, owners: [] });
     setOwnerSettlement({ totalEarned: 0, totalPaid: 0, pendingBalance: 0, paymentHistory: [] });
     setOwnerSettlementRows([]);
-    setBusinessSettlement({ tailorEarned: 0, butcherEarned: 0, totalEarned: 0 });
+    setBusinessSettlement({ items: [], totalEarned: 0 });
     setBreakdownOwner(null);
     setCommissionModal(null);
     setOwnerFormOpen(false);
@@ -233,7 +257,7 @@ export default function OwnerExpenditurePage() {
       setOwnerForm({
         name: "",
         phone: "",
-        businessType: "tailor",
+        businessType: businessOptions[0]?.slug || "",
         workerCount: 0,
         commissionPerHour: 0
       });
@@ -481,14 +505,12 @@ export default function OwnerExpenditurePage() {
       {loading ? <p className="card">Loading owner analytics...</p> : null}
 
       <div className="metric-grid">
-        <article className="card metric-card">
-          <p>Tailor Earned (Month)</p>
-          <h3>INR {formatMoney(businessSettlement.tailorEarned)}</h3>
-        </article>
-        <article className="card metric-card">
-          <p>Butcher Earned (Month)</p>
-          <h3>INR {formatMoney(businessSettlement.butcherEarned)}</h3>
-        </article>
+        {businessSettlement.items.map((item) => (
+          <article className="card metric-card" key={item.businessType}>
+            <p>{item.businessName} Earned (Month)</p>
+            <h3>INR {formatMoney(item.earned)}</h3>
+          </article>
+        ))}
         <article className="card metric-card">
           <p>Total Business Earned (Month)</p>
           <h3>INR {formatMoney(businessSettlement.totalEarned)}</h3>
@@ -614,8 +636,11 @@ export default function OwnerExpenditurePage() {
             value={ownerForm.businessType}
             onChange={(e) => setOwnerForm((p) => ({ ...p, businessType: e.target.value }))}
           >
-            <option value="tailor">tailor</option>
-            <option value="butcher">butcher</option>
+            {businessOptions.map((business) => (
+              <option key={business.slug} value={business.slug}>
+                {business.name}
+              </option>
+            ))}
           </select>
           <input
             type="number"

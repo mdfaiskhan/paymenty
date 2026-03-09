@@ -2,12 +2,16 @@ const { z } = require("zod");
 
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, "Invalid ObjectId");
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD");
+const businessSlug = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/i, "Invalid business slug");
 
 const createOwnerSchema = z.object({
   body: z.object({
     name: z.string().trim().min(1).max(120),
     phone: z.string().trim().min(5).max(25),
-    businessType: z.enum(["tailor", "butcher"]),
+    businessType: businessSlug,
     workerCount: z.coerce.number().int().min(0),
     commissionPerHour: z.coerce.number().min(0),
     effectiveFrom: dateOnly.optional()
@@ -20,7 +24,7 @@ const updateOwnerSchema = z.object({
   body: z.object({
     name: z.string().trim().min(1).max(120).optional(),
     phone: z.string().trim().min(5).max(25).optional(),
-    businessType: z.enum(["tailor", "butcher"]).optional(),
+    businessType: businessSlug.optional(),
     workerCount: z.coerce.number().int().min(0).optional(),
     isActive: z.boolean().optional()
   }),
@@ -65,7 +69,7 @@ const upsertOwnerDailyHoursSchema = z.object({
 const listOwnersSchema = z.object({
   body: z.object({}).passthrough(),
   query: z.object({
-    businessType: z.enum(["tailor", "butcher"]).optional(),
+    businessType: businessSlug.optional(),
     search: z.string().trim().optional()
   }),
   params: z.object({}).passthrough()

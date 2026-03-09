@@ -39,8 +39,8 @@ export default function EmployeeTable({
             <th>Yesterday {metricHeader}</th>
             <th>Range Hours</th>
             <th>Range {metricHeader}</th>
-            <th>Month Hours</th>
-            <th>Month {metricHeader}</th>
+            <th>Total Hours</th>
+            <th>Total {metricHeader}</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -57,8 +57,8 @@ export default function EmployeeTable({
               <td data-label={`Yesterday ${metricHeader}`}>{metricValue(row.yesterday)}</td>
               <td data-label="Range Hours">{formatHours(row.range?.hours)}</td>
               <td data-label={`Range ${metricHeader}`}>{metricValue(row.range)}</td>
-              <td data-label="Month Hours">{formatHours(row.month?.hours)}</td>
-              <td data-label={`Month ${metricHeader}`}>{metricValue(row.month)}</td>
+              <td data-label="Total Hours">{formatHours(row.total?.hours)}</td>
+              <td data-label={`Total ${metricHeader}`}>{metricValue(row.total)}</td>
               <td data-label="Actions">
                 <div className="action-row">
                   <button className="button small" onClick={() => onAddHours(row)} type="button">

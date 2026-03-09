@@ -22,6 +22,11 @@ export default function MetricCards({ analytics, rangeLabel = "Selected Range" }
       rangeLabel,
       toFiniteNumber(analytics?.range?.totalEarningsOrCuts, 0),
       toFiniteNumber(analytics?.range?.totalHours, 0)
+    ],
+    [
+      "Total",
+      toFiniteNumber(analytics?.total?.totalEarningsOrCuts, 0),
+      toFiniteNumber(analytics?.total?.totalHours, 0)
     ]
   ];
 
