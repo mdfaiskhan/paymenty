@@ -11,7 +11,7 @@ const {
 
 const ANALYTICS_CACHE_TTL_MS = Number(process.env.ANALYTICS_CACHE_TTL_MS || 15000);
 const MAX_ANALYTICS_CACHE_ENTRIES = Number(process.env.MAX_ANALYTICS_CACHE_ENTRIES || 300);
-const ANALYTICS_CACHE_SCHEMA_VERSION = "v3";
+const ANALYTICS_CACHE_SCHEMA_VERSION = "v4";
 const analyticsCache = new Map();
 
 function setAnalyticsCache(key, value) {
@@ -55,6 +55,17 @@ function addDays(date, days) {
 
 function dateKey(date) {
   return new Date(date).toISOString().slice(0, 10);
+}
+
+function normalizeIdentityValue(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeLooseName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
 }
 
 function currentPeriodBounds() {
@@ -332,16 +343,51 @@ async function computeBusinessAnalytics(businessType, options = {}) {
     : { start: bounds.trendStart, end: bounds.trendEnd };
   const analysisStart = bounds.trendStart < bounds.monthStart ? bounds.trendStart : bounds.monthStart;
 
-  const [employees, windowRows, customRangeRows] = await Promise.all([
+  const [employees, allBusinessEmployees, windowRows, customRangeRows] = await Promise.all([
     Employee.find({ businessType, isActive: true }).sort({ createdAt: -1 }).lean(),
+    Employee.find({ businessType }).select("_id phone email name placeId").lean(),
     aggregateEmployeeDaily(businessType, analysisStart, bounds.monthEnd, business.calcType),
     hasCustomRange
       ? aggregateEmployeeDaily(businessType, rangeStart, rangeEnd, business.calcType)
       : Promise.resolve(null)
   ]);
+  const activeIdentity = employees.map((emp) => ({
+    id: String(emp._id),
+    phone: normalizeIdentityValue(emp.phone),
+    email: normalizeIdentityValue(emp.email),
+    name: normalizeLooseName(emp.name),
+    placeId: normalizeIdentityValue(emp.placeId)
+  }));
+
+  const ownerByHistoricalId = new Map();
+  activeIdentity.forEach((entry) => ownerByHistoricalId.set(entry.id, entry.id));
+  allBusinessEmployees.forEach((row) => {
+    const historicalId = String(row._id);
+    const phone = normalizeIdentityValue(row.phone);
+    const email = normalizeIdentityValue(row.email);
+    const name = normalizeLooseName(row.name);
+    const placeId = normalizeIdentityValue(row.placeId);
+
+    let owner =
+      activeIdentity.find((entry) => entry.phone && entry.email && entry.phone === phone && entry.email === email)
+        ?.id ||
+      activeIdentity.find((entry) => entry.phone && entry.phone === phone)?.id ||
+      activeIdentity.find((entry) => entry.email && entry.email === email)?.id ||
+      activeIdentity.find((entry) => entry.name && entry.placeId && entry.name === name && entry.placeId === placeId)
+        ?.id ||
+      activeIdentity.find((entry) => entry.name && entry.name === name)?.id;
+
+    if (!owner && ownerByHistoricalId.has(historicalId)) {
+      owner = ownerByHistoricalId.get(historicalId);
+    }
+    if (owner) {
+      ownerByHistoricalId.set(historicalId, owner);
+    }
+  });
+
   const totalEnd = hasCustomRange ? rangeEnd : bounds.todayEnd;
   const totalRows = await aggregateEmployeeDailyByEmployees(
-    employees.map((emp) => emp._id),
+    Array.from(ownerByHistoricalId.keys()).map((id) => new mongoose.Types.ObjectId(id)),
     businessType,
     new Date(Date.UTC(1970, 0, 1)),
     totalEnd,
@@ -471,7 +517,8 @@ async function computeBusinessAnalytics(businessType, options = {}) {
   }
 
   totalRows.forEach((row) => {
-    const key = String(row.employeeId);
+    const sourceId = String(row.employeeId);
+    const key = ownerByHistoricalId.get(sourceId) || sourceId;
     if (!employeeBreakdown.has(key)) {
       return;
     }
@@ -515,9 +562,10 @@ function invalidateBusinessAnalyticsCache(businessType) {
     analyticsCache.clear();
     return;
   }
-  const prefix = `${String(businessType)}:`;
+  const cacheBusiness = String(businessType);
+  const prefix = `${ANALYTICS_CACHE_SCHEMA_VERSION}:${cacheBusiness}:`;
   Array.from(analyticsCache.keys()).forEach((key) => {
-    if (key === String(businessType) || key.startsWith(prefix)) {
+    if (key.startsWith(prefix)) {
       analyticsCache.delete(key);
     }
   });

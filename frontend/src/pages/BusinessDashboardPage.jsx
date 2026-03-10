@@ -16,11 +16,11 @@ import {
   updateEmployeeApi,
   updateWorkApi
 } from "../api/businessApi";
-import { firstDayOfCurrentMonth, getCurrentMonth, monthOptions, todayDateOnly } from "../utils/date";
+import { getCurrentMonth, monthOptions, todayDateOnly } from "../utils/date";
 import { downloadCsv } from "../utils/csv";
 import { useAnalytics } from "../context/AnalyticsContext";
 import { useBusinesses } from "../context/BusinessContext";
-import { formatTwoDecimals, toFiniteNumber } from "../utils/number";
+import { toFiniteNumber } from "../utils/number";
 
 export default function BusinessDashboardPage() {
   const { businessType } = useParams();
@@ -46,8 +46,6 @@ export default function BusinessDashboardPage() {
   const [historyMonth, setHistoryMonth] = useState(getCurrentMonth());
   const [historyStartDate, setHistoryStartDate] = useState(todayDateOnly());
   const [historyEndDate, setHistoryEndDate] = useState(todayDateOnly());
-  const [rangeStartDate, setRangeStartDate] = useState(firstDayOfCurrentMonth());
-  const [rangeEndDate, setRangeEndDate] = useState(todayDateOnly());
   const historyMonthChoices = useMemo(() => monthOptions(12, 0), []);
 
   useEffect(() => {
@@ -55,11 +53,6 @@ export default function BusinessDashboardPage() {
       setSelectedBusiness(businessType);
     }
   }, [businessType, setSelectedBusiness]);
-
-  useEffect(() => {
-    setRangeStartDate(activeRange?.startDate || firstDayOfCurrentMonth());
-    setRangeEndDate(activeRange?.endDate || todayDateOnly());
-  }, [activeRange?.startDate, activeRange?.endDate]);
 
   const rows = analyticsData?.employeeBreakdown || [];
   const activeBusiness = businesses.find((b) => b.slug === businessType);
@@ -93,19 +86,14 @@ export default function BusinessDashboardPage() {
   const sortedRows = useMemo(() => {
     const copy = [...filteredRows];
     const num = (v) => Number(v) || 0;
-    const rangeTotal = (row) => {
-      if (sortRange === "yesterday") return num(row.yesterday?.total);
-      if (sortRange === "range") return num(row.range?.total);
-      if (sortRange === "total") return num(row.total?.total);
-      return num(row.month?.total);
-    };
+    const metricTotal = (row) => (sortRange === "yesterday" ? num(row.yesterday?.total) : num(row.total?.total));
 
     copy.sort((a, b) => {
       if (sortBy === "amountAsc") {
-        return rangeTotal(a) - rangeTotal(b);
+        return metricTotal(a) - metricTotal(b);
       }
       if (sortBy === "amountDesc") {
-        return rangeTotal(b) - rangeTotal(a);
+        return metricTotal(b) - metricTotal(a);
       }
       if (sortBy === "nameAsc") {
         return String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity: "base" });
@@ -113,7 +101,7 @@ export default function BusinessDashboardPage() {
       if (sortBy === "nameDesc") {
         return String(b.name || "").localeCompare(String(a.name || ""), undefined, { sensitivity: "base" });
       }
-      return rangeTotal(b) - rangeTotal(a);
+      return metricTotal(b) - metricTotal(a);
     });
 
     return copy;
@@ -263,62 +251,18 @@ export default function BusinessDashboardPage() {
       name: row.name,
       yesterdayHours: row.yesterday?.hours || 0,
       yesterdayTotal: row.yesterday?.total || 0,
-      rangeHours: row.range?.hours || 0,
-      rangeTotal: row.range?.total || 0,
       totalHours: row.total?.hours || 0,
       totalCutsOrEarnings: row.total?.total || 0
     }));
     downloadCsv(
       `${businessType}-analytics.csv`,
-      ["name", "yesterdayHours", "yesterdayTotal", "rangeHours", "rangeTotal", "totalHours", "totalCutsOrEarnings"],
+      ["name", "yesterdayHours", "yesterdayTotal", "totalHours", "totalCutsOrEarnings"],
       csvRows
     );
   }
 
-  async function resetRangeToMonth() {
-    const start = firstDayOfCurrentMonth();
-    const end = todayDateOnly();
-    setRangeStartDate(start);
-    setRangeEndDate(end);
-    await refreshAnalytics({
-      businessType,
-      startDate: "",
-      endDate: ""
-    });
-  }
-
-  const selectedRangeLabel = analyticsData?.selectedRange
-    ? `${analyticsData.selectedRange.startDate} to ${analyticsData.selectedRange.endDate}`
-    : "Selected Range";
-  const metricRangeLabel = analyticsData?.selectedRange
-    ? `Range (${analyticsData.selectedRange.startDate.slice(5)} to ${analyticsData.selectedRange.endDate.slice(5)})`
-    : "Range";
-
   function onSortRangeChange(next) {
     setSortRange(next);
-  }
-
-  useEffect(() => {
-    if (sortRange !== "range") {
-      return;
-    }
-    if (!rangeStartDate || !rangeEndDate || rangeStartDate > rangeEndDate) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      refreshAnalytics({
-        businessType,
-        startDate: rangeStartDate,
-        endDate: rangeEndDate
-      });
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [sortRange, rangeStartDate, rangeEndDate, businessType]);
-
-  function formatMetricValue(value) {
-    const n = toFiniteNumber(value, 0);
-    const amount = formatTwoDecimals(n, 0).replace(/\.00$/, "");
-    return unit === "cuts" ? amount : `INR ${amount}`;
   }
 
   return (
@@ -343,18 +287,7 @@ export default function BusinessDashboardPage() {
           <select value={sortRange} onChange={(e) => onSortRangeChange(e.target.value)}>
             <option value="total">Total</option>
             <option value="yesterday">Yesterday</option>
-            <option value="month">This Month</option>
-            <option value="range">Range</option>
           </select>
-          {sortRange === "range" ? (
-            <>
-              <input type="date" value={rangeStartDate} onChange={(e) => setRangeStartDate(e.target.value)} />
-              <input type="date" value={rangeEndDate} onChange={(e) => setRangeEndDate(e.target.value)} />
-              <button className="button ghost" type="button" onClick={resetRangeToMonth}>
-                This Month
-              </button>
-            </>
-          ) : null}
           <button className="button ghost" onClick={exportEmployeesCsv} type="button">
             Export CSV
           </button>
@@ -374,12 +307,12 @@ export default function BusinessDashboardPage() {
         onDelete={removeEmployee}
       />
 
-      <MetricCards analytics={analyticsData} rangeLabel={metricRangeLabel} />
+      <MetricCards analytics={analyticsData} />
       <TrendChart
         unit={unit}
         dailyTrend={analyticsData?.dailyTrend || []}
         businessName={pageTitle}
-        subtitle={`Business: ${pageTitle} | Range: ${selectedRangeLabel}`}
+        subtitle={`Business: ${pageTitle}`}
       />
 
       <article className="card section-card">
@@ -389,16 +322,14 @@ export default function BusinessDashboardPage() {
             <thead>
               <tr>
                 <th>Name</th>
-                {(analyticsData?.rangeDates || []).map((date) => (
-                  <th key={date}>{date.slice(5)}</th>
-                ))}
-                <th>Range Total</th>
+                <th>Yesterday</th>
+                <th>Total</th>
               </tr>
             </thead>
             <tbody>
               {!sortedRows.length ? (
                 <tr>
-                  <td data-label="Status" colSpan={(analyticsData?.rangeDates?.length || 0) + 2}>
+                  <td data-label="Status" colSpan={3}>
                     No employee activity found.
                   </td>
                 </tr>
@@ -408,12 +339,8 @@ export default function BusinessDashboardPage() {
                   <td data-label="Name">
                     <strong>{row.name}</strong>
                   </td>
-                  {(analyticsData?.rangeDates || []).map((date) => (
-                    <td key={`${row.employeeId}-${date}`} data-label={date.slice(5)}>
-                      {formatMetricValue(row.rangeDaily?.[date] || 0)}
-                    </td>
-                  ))}
-                  <td data-label="Range Total">{formatMetricValue(row.range?.total || 0)}</td>
+                  <td data-label="Yesterday">{toFiniteNumber(row.yesterday?.total, 0)}</td>
+                  <td data-label="Total">{toFiniteNumber(row.total?.total, 0)}</td>
                 </tr>
               ))}
             </tbody>

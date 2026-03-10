@@ -5,23 +5,13 @@ function formatMetricNumber(value) {
   return raw.replace(/\.00$/, "");
 }
 
-export default function MetricCards({ analytics, rangeLabel = "Selected Range" }) {
+export default function MetricCards({ analytics }) {
   const isEarnings = analytics?.unit !== "cuts";
   const cards = [
     [
       "Yesterday",
       toFiniteNumber(analytics?.yesterday?.totalEarningsOrCuts, 0),
       toFiniteNumber(analytics?.yesterday?.totalHours, 0)
-    ],
-    [
-      "This Month",
-      toFiniteNumber(analytics?.month?.totalEarningsOrCuts, 0),
-      toFiniteNumber(analytics?.month?.totalHours, 0)
-    ],
-    [
-      rangeLabel,
-      toFiniteNumber(analytics?.range?.totalEarningsOrCuts, 0),
-      toFiniteNumber(analytics?.range?.totalHours, 0)
     ],
     [
       "Total",

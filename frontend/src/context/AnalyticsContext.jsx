@@ -3,7 +3,7 @@ import { getAnalyticsApi } from "../api/businessApi";
 
 const AnalyticsContext = createContext(null);
 const analyticsMemoryCache = new Map();
-const ANALYTICS_CACHE_SCHEMA_VERSION = "v3";
+const ANALYTICS_CACHE_SCHEMA_VERSION = "v4";
 const MAX_ANALYTICS_CACHE_ENTRIES = 40;
 const ANALYTICS_CACHE_INDEX_KEY = `paymenty_analytics_index_${ANALYTICS_CACHE_SCHEMA_VERSION}`;
 
@@ -31,7 +31,7 @@ function normalizeAnalyticsPayload(payload) {
   const rows = Array.isArray(payload.employeeBreakdown) ? payload.employeeBreakdown : [];
   const normalizedRows = rows.map((row) => {
     const hasTotal = row?.total && typeof row.total === "object";
-    const fallbackTotal = row?.month && typeof row.month === "object" ? row.month : { hours: 0, total: 0 };
+    const fallbackTotal = { hours: 0, total: 0 };
     return {
       ...row,
       total: hasTotal ? row.total : fallbackTotal
@@ -57,6 +57,15 @@ function normalizeAnalyticsPayload(payload) {
     employeeBreakdown: normalizedRows,
     total: summaryTotal
   };
+}
+
+function normalizeRange(range) {
+  const startDate = String(range?.startDate || "").trim();
+  const endDate = String(range?.endDate || "").trim();
+  if (!startDate || !endDate || startDate > endDate) {
+    return { startDate: "", endDate: "" };
+  }
+  return { startDate, endDate };
 }
 
 function readSessionCache(key) {
@@ -132,12 +141,14 @@ export function AnalyticsProvider({ children }) {
   async function refreshAnalytics(arg) {
     const isObjectArg = arg && typeof arg === "object";
     const targetBusiness = isObjectArg ? arg.businessType || selectedBusiness : arg || selectedBusiness;
-    const nextRange = isObjectArg
-      ? {
-          startDate: arg.startDate || "",
-          endDate: arg.endDate || ""
-        }
-      : activeRange;
+    const nextRange = normalizeRange(
+      isObjectArg
+        ? {
+            startDate: arg.startDate || "",
+            endDate: arg.endDate || ""
+          }
+        : activeRange
+    );
     if (!targetBusiness) {
       return;
     }

@@ -4,15 +4,36 @@ const initialState = { name: "", phone: "", email: "", placeId: "", location: ""
 
 export default function EmployeeForm({ businessType, onSubmit, initial, submitText = "Save" }) {
   const [form, setForm] = useState(initial || initialState);
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  function handleSubmit(e) {
+  function validationMessage(details) {
+    const fieldErrors = details?.fieldErrors || {};
+    const entries = Object.entries(fieldErrors).find(([, msgs]) => Array.isArray(msgs) && msgs.length);
+    if (!entries) {
+      return "";
+    }
+    const [field, msgs] = entries;
+    return `${field}: ${msgs[0]}`;
+  }
+
+  async function handleSubmit(e) {
     e.preventDefault();
-    onSubmit({
-      ...form,
-      ...(initial ? {} : { businessType })
-    });
-    if (!initial) {
-      setForm(initialState);
+    setError("");
+    try {
+      setSubmitting(true);
+      await onSubmit({
+        ...form,
+        ...(initial ? {} : { businessType })
+      });
+      if (!initial) {
+        setForm(initialState);
+      }
+    } catch (submitError) {
+      const detailError = validationMessage(submitError?.response?.data?.details);
+      setError(detailError || submitError?.response?.data?.message || "Failed to save employee");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -49,9 +70,10 @@ export default function EmployeeForm({ businessType, onSubmit, initial, submitTe
         onChange={(e) => setForm((s) => ({ ...s, location: e.target.value }))}
         required
       />
-      <button className="button" type="submit">
+      <button className="button" type="submit" disabled={submitting}>
         {submitText}
       </button>
+      {error ? <p className="error-text">{error}</p> : null}
     </form>
   );
 }

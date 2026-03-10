@@ -44,14 +44,31 @@ async function getBusinessBySlug(slug) {
 }
 
 async function createBusiness(payload) {
-  const slug = toSlug(payload.slug || payload.name);
-  if (!slug) {
+  const explicitSlug = String(payload.slug || "").trim();
+  const baseSlug = toSlug(explicitSlug || payload.name);
+  if (!baseSlug) {
     throw new ApiError(400, "Could not derive a valid business slug");
   }
 
-  const existing = await Business.findOne({ slug }).lean();
+  let slug = baseSlug;
+  let existing = await Business.findOne({ slug }).lean();
+
   if (existing && existing.isActive) {
-    throw new ApiError(409, "Business already exists");
+    if (explicitSlug) {
+      throw new ApiError(409, "Business already exists");
+    }
+
+    // Auto-resolve conflicts when slug is derived from name.
+    let counter = 2;
+    while (existing && existing.isActive) {
+      const suffix = `-${counter}`;
+      slug = `${baseSlug}`.slice(0, Math.max(1, 80 - suffix.length)) + suffix;
+      existing = await Business.findOne({ slug }).lean();
+      counter += 1;
+      if (counter > 9999) {
+        throw new ApiError(500, "Could not generate unique business slug");
+      }
+    }
   }
 
   if (existing && !existing.isActive) {

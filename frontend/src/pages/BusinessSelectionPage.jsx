@@ -24,7 +24,7 @@ export default function BusinessSelectionPage() {
       setForm({ name: "", slug: "", calcType: form.calcType });
       setSaveMessage("Business created");
     } catch (err) {
-      setSaveError(err.response?.data?.message || "Could not create business");
+      setSaveError(err.response?.data?.message || err.message || "Could not create business");
     } finally {
       setSaving(false);
     }

@@ -64,14 +64,19 @@ export async function getWorkHistoryApi(employeeId, params = {}) {
 }
 
 export async function getAnalyticsApi(businessType, params = {}) {
+  const startDate = String(params.startDate || "").trim();
+  const endDate = String(params.endDate || "").trim();
+  const hasValidRange = Boolean(startDate && endDate && startDate <= endDate);
+
   const { data } = await apiClient.get(`/api/analytics/${businessType}`, {
     params: {
-      startDate: params.startDate || undefined,
-      endDate: params.endDate || undefined,
+      startDate: hasValidRange ? startDate : undefined,
+      endDate: hasValidRange ? endDate : undefined,
       _t: Date.now()
     },
     headers: {
-      "Cache-Control": "no-cache"
+      "Cache-Control": "no-cache, no-store, max-age=0",
+      Pragma: "no-cache"
     }
   });
   return data;

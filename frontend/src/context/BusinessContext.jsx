@@ -80,7 +80,12 @@ export function BusinessProvider({ children }) {
   }
 
   async function addBusiness(payload) {
-    const created = await createBusinessApi(payload);
+    const normalizedPayload = {
+      name: String(payload?.name || "").trim(),
+      calcType: payload?.calcType || "tailor_slab_v1",
+      ...(String(payload?.slug || "").trim() ? { slug: String(payload.slug).trim() } : {})
+    };
+    const created = await createBusinessApi(normalizedPayload);
     await refreshBusinesses();
     return created;
   }
