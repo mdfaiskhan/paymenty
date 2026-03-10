@@ -9,7 +9,7 @@ const {
   metricExpressionForCalcTypeWithRule
 } = require("./payout.service");
 
-const ANALYTICS_CACHE_TTL_MS = Number(process.env.ANALYTICS_CACHE_TTL_MS || 15000);
+const ANALYTICS_CACHE_TTL_MS = Number(process.env.ANALYTICS_CACHE_TTL_MS || 60000);
 const MAX_ANALYTICS_CACHE_ENTRIES = Number(process.env.MAX_ANALYTICS_CACHE_ENTRIES || 300);
 const ANALYTICS_CACHE_SCHEMA_VERSION = "v4";
 const analyticsCache = new Map();

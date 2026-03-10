@@ -36,6 +36,28 @@ const apiClient = axios.create({
   timeout: 30000
 });
 
+let keepAliveTimer = null;
+
+function startRenderKeepAlive() {
+  if (keepAliveTimer || typeof window === "undefined") {
+    return;
+  }
+  const base = String(apiClient.defaults.baseURL || "");
+  if (!/onrender\.com/i.test(base)) {
+    return;
+  }
+
+  const ping = () => {
+    apiClient.get("/health", { timeout: 8000 }).catch(() => {
+      // Ignore keep-alive ping failures.
+    });
+  };
+
+  // Wake backend quickly after frontend load, then keep warm.
+  ping();
+  keepAliveTimer = window.setInterval(ping, 4 * 60 * 1000);
+}
+
 export function attachToken(token) {
   if (token) {
     apiClient.defaults.headers.common.Authorization = `Bearer ${token}`;
@@ -43,6 +65,8 @@ export function attachToken(token) {
     delete apiClient.defaults.headers.common.Authorization;
   }
 }
+
+startRenderKeepAlive();
 
 apiClient.interceptors.request.use((config) => {
   if (!config.headers.Authorization) {
