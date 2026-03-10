@@ -42,6 +42,8 @@ export default function BusinessDashboardPage() {
   const [editEmployee, setEditEmployee] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyRows, setHistoryRows] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const [historyMode, setHistoryMode] = useState("month");
   const [historyMonth, setHistoryMonth] = useState(getCurrentMonth());
   const [historyStartDate, setHistoryStartDate] = useState(todayDateOnly());
@@ -157,9 +159,18 @@ export default function BusinessDashboardPage() {
     setHistoryStartDate(today);
     setHistoryEndDate(today);
     setHistoryEmployee(employee);
-    const result = await getWorkHistoryApi(employee.employeeId, { month });
-    setHistoryRows(result.days || []);
     setHistoryOpen(true);
+    setHistoryRows([]);
+    setHistoryError("");
+    setHistoryLoading(true);
+    try {
+      const result = await getWorkHistoryApi(employee.employeeId, { month });
+      setHistoryRows(result.days || []);
+    } catch (err) {
+      setHistoryError(err.response?.data?.message || "Failed to load history");
+    } finally {
+      setHistoryLoading(false);
+    }
   }
 
   async function loadHistory(employeeId, mode, values) {
@@ -176,8 +187,17 @@ export default function BusinessDashboardPage() {
     if (!historyEmployee) {
       return;
     }
-    const result = await loadHistory(historyEmployee.employeeId, nextMode, values);
-    setHistoryRows(result.days || []);
+    setHistoryError("");
+    setHistoryLoading(true);
+    try {
+      const result = await loadHistory(historyEmployee.employeeId, nextMode, values);
+      setHistoryRows(result.days || []);
+    } catch (err) {
+      setHistoryRows([]);
+      setHistoryError(err.response?.data?.message || "Failed to load history");
+    } finally {
+      setHistoryLoading(false);
+    }
   }
 
   async function changeHistoryMode(mode) {
@@ -395,6 +415,8 @@ export default function BusinessDashboardPage() {
         onClose={() => {
           setHistoryOpen(false);
           setHistoryEmployee(null);
+          setHistoryError("");
+          setHistoryLoading(false);
         }}
       >
         <div className="filters">
@@ -440,6 +462,8 @@ export default function BusinessDashboardPage() {
             </>
           ) : null}
         </div>
+        {historyLoading ? <p className="card">Loading history...</p> : null}
+        {historyError ? <p className="error-text">{historyError}</p> : null}
         <WorkHistoryView
           unit={unit}
           calcType={calcType}
