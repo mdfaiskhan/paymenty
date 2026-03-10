@@ -1,9 +1,10 @@
 const Owner = require("../models/Owner.model");
 const OwnerCommissionRule = require("../models/OwnerCommissionRule.model");
 const OwnerDailyHours = require("../models/OwnerDailyHours.model");
+const WorkEntry = require("../models/WorkEntry.model");
 const ApiError = require("../utils/ApiError");
 const { parseYyyyMmDd } = require("../utils/date");
-const { getBusinessBySlug, toSlug } = require("./business.service");
+const { getBusinessBySlug, listActiveBusinesses, toSlug } = require("./business.service");
 
 function utcStartOfDay(date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -98,6 +99,45 @@ async function aggregateDailyOwnerHours(start, end, ownerIds) {
   return byOwner;
 }
 
+async function aggregateDailyEmployeeHoursByBusiness(start, end, businessTypes) {
+  if (!businessTypes.length) {
+    return new Map();
+  }
+
+  const rows = await WorkEntry.aggregate([
+    {
+      $match: {
+        businessType: { $in: businessTypes },
+        isDeleted: { $ne: true },
+        workDate: { $gte: start, $lte: end }
+      }
+    },
+    {
+      $group: {
+        _id: {
+          businessType: "$businessType",
+          workDate: "$workDate"
+        },
+        hours: { $sum: "$hours" }
+      }
+    }
+  ]);
+
+  const byBusiness = new Map();
+  rows.forEach((row) => {
+    const businessType = String(row._id.businessType || "");
+    if (!businessType) {
+      return;
+    }
+    if (!byBusiness.has(businessType)) {
+      byBusiness.set(businessType, new Map());
+    }
+    byBusiness.get(businessType).set(dateKey(row._id.workDate), Number(row.hours) || 0);
+  });
+
+  return byBusiness;
+}
+
 function commissionForDate(rules, date) {
   for (const rule of rules) {
     const fromOk = rule.effectiveFrom <= date;
@@ -107,6 +147,18 @@ function commissionForDate(rules, date) {
     }
   }
   return 0;
+}
+
+function groupRulesByOwner(rules) {
+  const rulesByOwner = new Map();
+  rules.forEach((rule) => {
+    const key = String(rule.ownerId);
+    if (!rulesByOwner.has(key)) {
+      rulesByOwner.set(key, []);
+    }
+    rulesByOwner.get(key).push(rule);
+  });
+  return rulesByOwner;
 }
 
 async function getOwnersWithCurrentCommission({ businessType, search, ownerId } = {}) {
@@ -146,6 +198,74 @@ async function getOwnersWithCurrentCommission({ businessType, search, ownerId } 
     ...owner,
     currentCommissionPerHour: currentRateMap.get(String(owner._id)) || 0
   }));
+}
+
+async function getOwnerDerivedRowsForPeriod({ owners, start, end }) {
+  if (!owners.length) {
+    return new Map();
+  }
+
+  const ownerIds = owners.map((owner) => owner._id);
+  const businessTypes = Array.from(
+    new Set(
+      owners
+        .map((owner) => String(owner.businessType || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  const [rules, businessHoursByBusiness] = await Promise.all([
+    OwnerCommissionRule.find({
+      ownerId: { $in: ownerIds },
+      effectiveFrom: { $lte: end },
+      $or: [{ effectiveTo: null }, { effectiveTo: { $gte: start } }]
+    })
+      .sort({ effectiveFrom: -1 })
+      .lean(),
+    aggregateDailyEmployeeHoursByBusiness(start, end, businessTypes)
+  ]);
+
+  const rulesByOwner = groupRulesByOwner(rules);
+  const rowsByOwner = new Map();
+
+  owners.forEach((owner) => {
+    const ownerKey = String(owner._id);
+    const businessHours = businessHoursByBusiness.get(owner.businessType) || new Map();
+    const rulesForOwner = rulesByOwner.get(ownerKey) || [];
+    const ownerRows = new Map();
+
+    businessHours.forEach((hours, dayKey) => {
+      const day = new Date(`${dayKey}T00:00:00.000Z`);
+      const rate = commissionForDate(rulesForOwner, day);
+      ownerRows.set(dayKey, {
+        date: day,
+        totalEmployeeHours: Number(hours) || 0,
+        commissionRate: rate,
+        earned: (Number(hours) || 0) * rate
+      });
+    });
+
+    rowsByOwner.set(ownerKey, ownerRows);
+  });
+
+  return rowsByOwner;
+}
+
+async function getOwnerDerivedTotalsForPeriod({ owners, start, end }) {
+  const rowsByOwner = await getOwnerDerivedRowsForPeriod({ owners, start, end });
+  const totalsByOwner = new Map();
+
+  rowsByOwner.forEach((rows, ownerKey) => {
+    let hoursWorked = 0;
+    let computedAmount = 0;
+    rows.forEach((row) => {
+      hoursWorked += Number(row.totalEmployeeHours) || 0;
+      computedAmount += Number(row.earned) || 0;
+    });
+    totalsByOwner.set(ownerKey, { hoursWorked, computedAmount });
+  });
+
+  return totalsByOwner;
 }
 
 async function createOwnerWithRule(payload) {
@@ -241,7 +361,7 @@ function sumForRange(rowsByDate, start, end) {
   rowsByDate.forEach((row, key) => {
     const d = new Date(`${key}T00:00:00.000Z`);
     if (d >= start && d <= end) {
-      hours += row.hours;
+      hours += row.totalEmployeeHours;
       commission += row.earned;
     }
   });
@@ -250,39 +370,22 @@ function sumForRange(rowsByDate, start, end) {
 
 async function getOwnersAnalytics({ ownerId, range }) {
   const owners = await getOwnersWithCurrentCommission({ ownerId });
-  const ownerIds = owners.map((o) => o._id);
-  const rules = await OwnerCommissionRule.find({ ownerId: { $in: ownerIds } })
-    .sort({ effectiveFrom: -1 })
-    .lean();
-
-  const rulesByOwner = new Map();
-  rules.forEach((rule) => {
-    const key = String(rule.ownerId);
-    if (!rulesByOwner.has(key)) {
-      rulesByOwner.set(key, []);
-    }
-    rulesByOwner.get(key).push(rule);
-  });
+  const businesses = await listActiveBusinesses();
+  const businessNameMap = new Map(
+    businesses.map((business) => [String(business.slug || ""), business.name])
+  );
 
   const monthBounds = periodBounds("month");
-  const ownerHours = await aggregateDailyOwnerHours(monthBounds.start, monthBounds.end, ownerIds);
+  const ownerRowsMap = await getOwnerDerivedRowsForPeriod({
+    owners,
+    start: monthBounds.start,
+    end: monthBounds.end
+  });
   const today = periodBounds("today");
   const week = periodBounds("week");
 
   const ownersRows = owners.map((owner) => {
-    const rulesForOwner = rulesByOwner.get(String(owner._id)) || [];
-    const dailyRows = new Map();
-    const hoursForOwner = ownerHours.get(String(owner._id)) || new Map();
-    hoursForOwner.forEach((hours, dayKey) => {
-      const d = new Date(`${dayKey}T00:00:00.000Z`);
-      const rate = commissionForDate(rulesForOwner, d);
-      dailyRows.set(dayKey, {
-        date: d,
-        hours,
-        rate,
-        earned: hours * rate
-      });
-    });
+    const dailyRows = ownerRowsMap.get(String(owner._id)) || new Map();
 
     const todayTotals = sumForRange(dailyRows, today.start, today.end);
     const weekTotals = sumForRange(dailyRows, week.start, week.end);
@@ -293,6 +396,7 @@ async function getOwnersAnalytics({ ownerId, range }) {
       name: owner.name,
       phone: owner.phone,
       businessType: owner.businessType,
+      businessName: businessNameMap.get(String(owner.businessType || "")) || owner.businessType,
       workerCount: owner.workerCount,
       commissionPerHour: owner.currentCommissionPerHour || 0,
       todayHours: todayTotals.hours,
@@ -306,12 +410,22 @@ async function getOwnersAnalytics({ ownerId, range }) {
 
   const cards = ownersRows.reduce(
     (acc, row) => {
+      acc.todayHours += row.todayHours;
+      acc.weekHours += row.weekHours;
+      acc.monthHours += row.monthHours;
       acc.todayCommission += row.todayCommission;
       acc.weekCommission += row.weekCommission;
       acc.monthCommission += row.monthCommission;
       return acc;
     },
-    { todayCommission: 0, weekCommission: 0, monthCommission: 0 }
+    {
+      todayHours: 0,
+      weekHours: 0,
+      monthHours: 0,
+      todayCommission: 0,
+      weekCommission: 0,
+      monthCommission: 0
+    }
   );
 
   if (range) {
@@ -336,31 +450,28 @@ async function getOwnerBreakdown(ownerId, query) {
   }
 
   const { start, end } = parseCustomBounds(query);
-  const byOwner = await aggregateDailyOwnerHours(start, end, [owner._id]);
-  const dailyHours = byOwner.get(String(owner._id)) || new Map();
-
-  const rules = await OwnerCommissionRule.find({ ownerId }).sort({ effectiveFrom: -1 }).lean();
-
-  const rows = Array.from(dailyHours.entries())
-    .map(([dayKey, hours]) => {
-      const d = new Date(`${dayKey}T00:00:00.000Z`);
-      const commissionRate = commissionForDate(rules, d);
-      return {
-        date: dayKey,
-        totalWorkerHours: hours,
-        commissionRate,
-        earned: hours * commissionRate
-      };
-    })
+  const business = await getBusinessBySlug(owner.businessType);
+  const ownerRows = await getOwnerDerivedRowsForPeriod({ owners: [owner], start, end });
+  const rows = Array.from((ownerRows.get(String(owner._id)) || new Map()).entries())
+    .map(([dayKey, row]) => ({
+      date: dayKey,
+      totalEmployeeHours: row.totalEmployeeHours,
+      totalWorkerHours: row.totalEmployeeHours,
+      commissionRate: row.commissionRate,
+      ownerCut: row.earned,
+      earned: row.earned
+    }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
   const totals = rows.reduce(
     (acc, row) => {
-      acc.totalWorkerHours += row.totalWorkerHours;
-      acc.totalEarned += row.earned;
+      acc.totalEmployeeHours += row.totalEmployeeHours;
+      acc.totalWorkerHours += row.totalEmployeeHours;
+      acc.totalOwnerCut += row.ownerCut;
+      acc.totalEarned += row.ownerCut;
       return acc;
     },
-    { totalWorkerHours: 0, totalEarned: 0 }
+    { totalEmployeeHours: 0, totalWorkerHours: 0, totalOwnerCut: 0, totalEarned: 0 }
   );
 
   return {
@@ -368,12 +479,28 @@ async function getOwnerBreakdown(ownerId, query) {
       ownerId: owner._id,
       name: owner.name,
       phone: owner.phone,
-      businessType: owner.businessType
+      businessType: owner.businessType,
+      businessName: business.name
     },
     range: query.month ? { month: query.month } : { startDate: query.startDate, endDate: query.endDate },
     totals,
     rows
   };
+}
+
+async function getOwnerDerivedAmountForPeriod(ownerId, periodStart, periodEnd) {
+  const owner = await Owner.findOne({ _id: ownerId, isActive: true }).lean();
+  if (!owner) {
+    throw new ApiError(404, "Owner not found or inactive");
+  }
+
+  const totalsByOwner = await getOwnerDerivedTotalsForPeriod({
+    owners: [owner],
+    start: periodStart,
+    end: periodEnd
+  });
+
+  return totalsByOwner.get(String(owner._id)) || { hoursWorked: 0, computedAmount: 0 };
 }
 
 module.exports = {
@@ -382,5 +509,6 @@ module.exports = {
   createOwnerCommissionVersion,
   upsertOwnerDailyHours,
   getOwnersAnalytics,
-  getOwnerBreakdown
+  getOwnerBreakdown,
+  getOwnerDerivedAmountForPeriod
 };

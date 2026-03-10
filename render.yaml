@@ -12,6 +12,18 @@ services:
         value: 7d
       - key: MONGO_URI
         sync: false
+      - key: MONGO_MAX_POOL_SIZE
+        value: 10
+      - key: MONGO_MIN_POOL_SIZE
+        value: 1
+      - key: MONGO_SERVER_SELECTION_TIMEOUT_MS
+        value: 10000
+      - key: MONGO_SOCKET_TIMEOUT_MS
+        value: 45000
+      - key: ANALYTICS_WARM_ON_START
+        value: true
+      - key: ANALYTICS_WARM_INTERVAL_MS
+        value: 300000
       - key: JWT_SECRET
         sync: false
       - key: OWNER_MODULE_PASSWORD

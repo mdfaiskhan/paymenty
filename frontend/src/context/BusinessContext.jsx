@@ -10,8 +10,26 @@ import {
 const BusinessContext = createContext(null);
 
 const DEFAULT_BUSINESSES = [
-  { name: "Tailor", slug: "tailor", calcType: "tailor_slab_v1", isActive: true },
-  { name: "Butcher", slug: "butcher", calcType: "butcher_cuts_v1", isActive: true }
+  {
+    name: "Tailor",
+    slug: "tailor",
+    calcType: "tailor_slab_v1",
+    ownerName: "",
+    ownerPhone: "",
+    ownerCommissionPerHour: 0,
+    ownerWorkerCount: 0,
+    isActive: true
+  },
+  {
+    name: "Butcher",
+    slug: "butcher",
+    calcType: "butcher_cuts_v1",
+    ownerName: "",
+    ownerPhone: "",
+    ownerCommissionPerHour: 0,
+    ownerWorkerCount: 0,
+    isActive: true
+  }
 ];
 
 function prettifyName(slug) {
@@ -53,12 +71,16 @@ export function BusinessProvider({ children }) {
         (employees || [])
           .map((emp) => String(emp?.businessType || "").trim().toLowerCase())
           .filter(Boolean)
-          .map((slug) => ({
-            name: prettifyName(slug),
-            slug,
-            calcType: "tailor_slab_v1",
-            isActive: true
-          }))
+            .map((slug) => ({
+              name: prettifyName(slug),
+              slug,
+              calcType: "tailor_slab_v1",
+              ownerName: "",
+              ownerPhone: "",
+              ownerCommissionPerHour: 0,
+              ownerWorkerCount: 0,
+              isActive: true
+            }))
       );
       setBusinesses(fromEmployees.length ? fromEmployees : DEFAULT_BUSINESSES);
     } catch (err) {
@@ -72,6 +94,10 @@ export function BusinessProvider({ children }) {
               name: prettifyName(slug),
               slug,
               calcType: "tailor_slab_v1",
+              ownerName: "",
+              ownerPhone: "",
+              ownerCommissionPerHour: 0,
+              ownerWorkerCount: 0,
               isActive: true
             }))
         );
@@ -88,6 +114,10 @@ export function BusinessProvider({ children }) {
   async function addBusiness(payload) {
     const normalizedPayload = {
       name: String(payload?.name || "").trim(),
+      ownerName: String(payload?.ownerName || "").trim(),
+      ownerPhone: String(payload?.ownerPhone || "").trim(),
+      ownerCommissionPerHour: Number(payload?.ownerCommissionPerHour) || 0,
+      ownerWorkerCount: Number(payload?.ownerWorkerCount) || 0,
       calcType: payload?.calcType || "tailor_slab_v1",
       ...(String(payload?.slug || "").trim() ? { slug: String(payload.slug).trim() } : {})
     };
@@ -99,6 +129,14 @@ export function BusinessProvider({ children }) {
   async function editBusiness(id, payload) {
     const normalizedPayload = {
       ...(payload?.name ? { name: String(payload.name).trim() } : {}),
+      ...(typeof payload?.ownerName !== "undefined" ? { ownerName: String(payload.ownerName).trim() } : {}),
+      ...(typeof payload?.ownerPhone !== "undefined" ? { ownerPhone: String(payload.ownerPhone).trim() } : {}),
+      ...(typeof payload?.ownerCommissionPerHour !== "undefined"
+        ? { ownerCommissionPerHour: Number(payload.ownerCommissionPerHour) || 0 }
+        : {}),
+      ...(typeof payload?.ownerWorkerCount !== "undefined"
+        ? { ownerWorkerCount: Number(payload.ownerWorkerCount) || 0 }
+        : {}),
       ...(payload?.calcType ? { calcType: payload.calcType } : {})
     };
     const updated = await updateBusinessApi(id, normalizedPayload);

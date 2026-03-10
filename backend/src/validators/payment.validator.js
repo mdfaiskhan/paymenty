@@ -8,7 +8,7 @@ const businessType = z
   .trim()
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/i, "Invalid business slug");
 const paymentMethod = z.enum(["cash", "bank", "upi"]);
-const rangeType = z.enum(["today", "week", "month", "custom"]);
+const rangeType = z.enum(["all", "today", "week", "month", "custom"]);
 
 const paymentBodySchema = z
   .object({

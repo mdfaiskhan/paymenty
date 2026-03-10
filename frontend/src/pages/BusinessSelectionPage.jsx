@@ -4,12 +4,27 @@ import { useBusinesses } from "../context/BusinessContext";
 
 export default function BusinessSelectionPage() {
   const { businesses, loading, error, addBusiness, editBusiness, removeBusiness } = useBusinesses();
-  const [form, setForm] = useState({ name: "", slug: "", calcType: "tailor_slab_v1" });
+  const [form, setForm] = useState({
+    name: "",
+    slug: "",
+    ownerName: "",
+    ownerPhone: "",
+    ownerCommissionPerHour: 200,
+    ownerWorkerCount: 0,
+    calcType: "tailor_slab_v1"
+  });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [editingId, setEditingId] = useState("");
-  const [editForm, setEditForm] = useState({ name: "", calcType: "tailor_slab_v1" });
+  const [editForm, setEditForm] = useState({
+    name: "",
+    ownerName: "",
+    ownerPhone: "",
+    ownerCommissionPerHour: 200,
+    ownerWorkerCount: 0,
+    calcType: "tailor_slab_v1"
+  });
 
   const sortedBusinesses = useMemo(
     () => [...businesses].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))),
@@ -27,7 +42,14 @@ export default function BusinessSelectionPage() {
     setSaveMessage("");
     try {
       await addBusiness(form);
-      setForm({ name: "", slug: "", calcType: form.calcType });
+      setForm((prev) => ({
+        ...prev,
+        name: "",
+        slug: "",
+        ownerName: "",
+        ownerPhone: "",
+        ownerWorkerCount: 0
+      }));
       setSaveMessage("Business created");
     } catch (err) {
       setSaveError(err.response?.data?.message || err.message || "Could not create business");
@@ -40,6 +62,10 @@ export default function BusinessSelectionPage() {
     setEditingId(businessIdentifier(row));
     setEditForm({
       name: row.name || "",
+      ownerName: row.ownerName || "",
+      ownerPhone: row.ownerPhone || "",
+      ownerCommissionPerHour: row.ownerCommissionPerHour || 0,
+      ownerWorkerCount: row.ownerWorkerCount || 0,
       calcType: row.calcType || "tailor_slab_v1"
     });
     setSaveError("");
@@ -108,6 +134,9 @@ export default function BusinessSelectionPage() {
                   <Link to={`/business/${business.slug}`}>
                     <h2>{business.name}</h2>
                     <p>{business.calcType === "butcher_cuts_v1" ? "Cuts per hour model" : "Slab earnings model"}</p>
+                    <p className="subtext">
+                      Owner: {business.ownerName || "Not set"} | Rate: INR {business.ownerCommissionPerHour || 0}/hr
+                    </p>
                   </Link>
                   <div className="action-row">
                     <button className="button small ghost" type="button" onClick={() => beginEdit(business)}>
@@ -124,6 +153,34 @@ export default function BusinessSelectionPage() {
                     value={editForm.name}
                     onChange={(e) => setEditForm((prev) => ({ ...prev, name: e.target.value }))}
                     placeholder="Business Name"
+                  />
+                  <input
+                    value={editForm.ownerName}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, ownerName: e.target.value }))}
+                    placeholder="Owner Name"
+                  />
+                  <input
+                    value={editForm.ownerPhone}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, ownerPhone: e.target.value }))}
+                    placeholder="Owner Phone"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editForm.ownerCommissionPerHour}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({ ...prev, ownerCommissionPerHour: e.target.value }))
+                    }
+                    placeholder="Owner Rate Per Hour"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={editForm.ownerWorkerCount}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, ownerWorkerCount: e.target.value }))}
+                    placeholder="Worker Count"
                   />
                   <select
                     value={editForm.calcType}
@@ -160,6 +217,35 @@ export default function BusinessSelectionPage() {
             placeholder="Slug (optional, e.g. salon-team)"
             value={form.slug}
             onChange={(e) => setForm((p) => ({ ...p, slug: e.target.value }))}
+          />
+          <input
+            placeholder="Owner Name"
+            value={form.ownerName}
+            onChange={(e) => setForm((p) => ({ ...p, ownerName: e.target.value }))}
+            required
+          />
+          <input
+            placeholder="Owner Phone"
+            value={form.ownerPhone}
+            onChange={(e) => setForm((p) => ({ ...p, ownerPhone: e.target.value }))}
+            required
+          />
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="Owner Rate Per Hour"
+            value={form.ownerCommissionPerHour}
+            onChange={(e) => setForm((p) => ({ ...p, ownerCommissionPerHour: e.target.value }))}
+            required
+          />
+          <input
+            type="number"
+            min="0"
+            step="1"
+            placeholder="Worker Count"
+            value={form.ownerWorkerCount}
+            onChange={(e) => setForm((p) => ({ ...p, ownerWorkerCount: e.target.value }))}
           />
           <select
             value={form.calcType}

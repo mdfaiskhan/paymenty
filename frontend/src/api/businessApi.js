@@ -92,12 +92,7 @@ export async function getAnalyticsApi(businessType, params = {}) {
   const { data } = await apiClient.get(`/api/analytics/${businessType}`, {
     params: {
       startDate: hasValidRange ? startDate : undefined,
-      endDate: hasValidRange ? endDate : undefined,
-      _t: Date.now()
-    },
-    headers: {
-      "Cache-Control": "no-cache, no-store, max-age=0",
-      Pragma: "no-cache"
+      endDate: hasValidRange ? endDate : undefined
     }
   });
   return data;

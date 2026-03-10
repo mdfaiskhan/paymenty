@@ -3,6 +3,7 @@ const WorkEntry = require("../models/WorkEntry.model");
 const Employee = require("../models/Employee.model");
 const Business = require("../models/Business.model");
 const ApiError = require("../utils/ApiError");
+const env = require("../config/env");
 const {
   tailorEarningsExpressionWithRule,
   butcherCutsExpressionWithRule,
@@ -13,6 +14,7 @@ const ANALYTICS_CACHE_TTL_MS = Number(process.env.ANALYTICS_CACHE_TTL_MS || 6000
 const MAX_ANALYTICS_CACHE_ENTRIES = Number(process.env.MAX_ANALYTICS_CACHE_ENTRIES || 300);
 const ANALYTICS_CACHE_SCHEMA_VERSION = "v4";
 const analyticsCache = new Map();
+let analyticsWarmInterval = null;
 
 function setAnalyticsCache(key, value) {
   if (analyticsCache.has(key)) {
@@ -327,6 +329,15 @@ async function getBusinessAnalytics(businessType, options = {}) {
   }
 }
 
+async function warmBusinessAnalytics(businessType, options = {}) {
+  try {
+    await getBusinessAnalytics(businessType, options);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`Analytics warm failed for ${businessType}:`, error.message);
+  }
+}
+
 async function computeBusinessAnalytics(businessType, options = {}) {
   const business = await Business.findOne({ slug: businessType, isActive: true }).lean();
   if (!business) {
@@ -571,6 +582,38 @@ function invalidateBusinessAnalyticsCache(businessType) {
   });
 }
 
+async function warmActiveBusinessAnalytics() {
+  const activeBusinesses = await Business.find({ isActive: true }).select("slug").lean();
+  await Promise.all(
+    activeBusinesses
+      .map((row) => String(row?.slug || "").trim())
+      .filter(Boolean)
+      .map((slug) => warmBusinessAnalytics(slug))
+  );
+}
+
+function startAnalyticsWarmLoop() {
+  if (!env.analyticsWarmOnStart || analyticsWarmInterval) {
+    return;
+  }
+
+  warmActiveBusinessAnalytics().catch((error) => {
+    // eslint-disable-next-line no-console
+    console.error("Initial analytics warm failed:", error.message);
+  });
+
+  analyticsWarmInterval = setInterval(() => {
+    warmActiveBusinessAnalytics().catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error("Scheduled analytics warm failed:", error.message);
+    });
+  }, env.analyticsWarmIntervalMs);
+
+  if (typeof analyticsWarmInterval.unref === "function") {
+    analyticsWarmInterval.unref();
+  }
+}
+
 function parseDateOnlyToUtcBounds(startDate, endDate) {
   const [sy, sm, sd] = startDate.split("-").map(Number);
   const [ey, em, ed] = endDate.split("-").map(Number);
@@ -665,5 +708,6 @@ async function getEmployeeWorkHistory(employeeId, query) {
 module.exports = {
   getBusinessAnalytics,
   getEmployeeWorkHistory,
-  invalidateBusinessAnalyticsCache
+  invalidateBusinessAnalyticsCache,
+  startAnalyticsWarmLoop
 };

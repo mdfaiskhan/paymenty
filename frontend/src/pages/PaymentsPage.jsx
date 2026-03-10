@@ -92,7 +92,7 @@ function buildStatus(computedAmount, paidAmount) {
 export default function PaymentsPage() {
   const { businesses } = useBusinesses();
   const [businessType, setBusinessType] = useState("all");
-  const [rangeType, setRangeType] = useState("month");
+  const [rangeType, setRangeType] = useState("all");
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth());
   const [customStartDate, setCustomStartDate] = useState(todayDateOnly());
   const [customEndDate, setCustomEndDate] = useState(todayDateOnly());
@@ -131,6 +131,9 @@ export default function PaymentsPage() {
   });
 
   const activeRange = useMemo(() => {
+    if (rangeType === "all") {
+      return null;
+    }
     if (rangeType === "month") {
       return monthBoundsFromValue(selectedMonth);
     }
@@ -138,6 +141,7 @@ export default function PaymentsPage() {
   }, [rangeType, selectedMonth, customStartDate, customEndDate]);
 
   const summaryLabel = useMemo(() => {
+    if (rangeType === "all") return "Earned Money (All Time)";
     if (rangeType === "today") return "Earned Money (Today)";
     if (rangeType === "week") return "Earned Money (This Week)";
     if (rangeType === "month") return "Earned Money (This Month)";
@@ -150,11 +154,14 @@ export default function PaymentsPage() {
     try {
       const params = {
         businessType,
-        rangeType: rangeType === "month" || rangeType === "custom" ? "custom" : rangeType,
+        rangeType:
+          rangeType === "month" || rangeType === "custom"
+            ? "custom"
+            : rangeType,
         startDate:
-          rangeType === "month" || rangeType === "custom" ? activeRange.start : undefined,
+          rangeType === "month" || rangeType === "custom" ? activeRange?.start : undefined,
         endDate:
-          rangeType === "month" || rangeType === "custom" ? activeRange.end : undefined
+          rangeType === "month" || rangeType === "custom" ? activeRange?.end : undefined
       };
 
       const [summaryRes, listRes] = await Promise.all([
@@ -179,10 +186,11 @@ export default function PaymentsPage() {
   }, [businessType, rangeType, selectedMonth, customStartDate, customEndDate, search]);
 
   function openRecord(row) {
+    const defaultRange = activeRange || getMonthBounds();
     setRecordRow(row);
     setRecordForm({
-      periodStart: activeRange.start,
-      periodEnd: activeRange.end,
+      periodStart: defaultRange.start,
+      periodEnd: defaultRange.end,
       paidAmount: Math.max(0, toFiniteNumber(row.pendingBalance, 0)),
       method: "bank",
       referenceId: "",
@@ -275,6 +283,7 @@ export default function PaymentsPage() {
             ))}
           </select>
           <select value={rangeType} onChange={(e) => setRangeType(e.target.value)}>
+            <option value="all">All Time</option>
             <option value="today">Today</option>
             <option value="week">This Week</option>
             <option value="month">This Month</option>

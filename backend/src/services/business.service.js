@@ -1,4 +1,6 @@
 const Business = require("../models/Business.model");
+const Owner = require("../models/Owner.model");
+const OwnerCommissionRule = require("../models/OwnerCommissionRule.model");
 const ApiError = require("../utils/ApiError");
 
 function toSlug(input) {
@@ -8,6 +10,64 @@ function toSlug(input) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
+}
+
+function utcStartOfDay(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+async function syncOwnerForBusiness(business, ownerPayload = {}) {
+  const ownerName = String(ownerPayload.ownerName ?? business.ownerName ?? "").trim();
+  const ownerPhone = String(ownerPayload.ownerPhone ?? business.ownerPhone ?? "").trim();
+  const ownerCommissionPerHour = Number(
+    ownerPayload.ownerCommissionPerHour ?? business.ownerCommissionPerHour ?? 0
+  );
+  const ownerWorkerCount = Number(ownerPayload.ownerWorkerCount ?? business.ownerWorkerCount ?? 0);
+
+  if (!ownerName || !ownerPhone) {
+    return null;
+  }
+
+  const existingOwner = await Owner.findOne({ businessType: business.slug, isActive: true }).sort({ createdAt: -1 });
+  const owner =
+    existingOwner ||
+    new Owner({
+      businessType: business.slug
+    });
+
+  owner.name = ownerName;
+  owner.phone = ownerPhone;
+  owner.workerCount = ownerWorkerCount;
+  owner.businessType = business.slug;
+  owner.isActive = true;
+  owner.deletedAt = null;
+  await owner.save();
+
+  const today = utcStartOfDay(new Date());
+  const activeRule = await OwnerCommissionRule.findOne({ ownerId: owner._id, effectiveTo: null })
+    .sort({ effectiveFrom: -1 });
+
+  if (!activeRule) {
+    await OwnerCommissionRule.create({
+      ownerId: owner._id,
+      commissionPerHour: ownerCommissionPerHour,
+      effectiveFrom: today,
+      effectiveTo: null
+    });
+  } else if (Number(activeRule.commissionPerHour) !== ownerCommissionPerHour) {
+    await OwnerCommissionRule.updateOne(
+      { _id: activeRule._id },
+      { effectiveTo: new Date(today.getTime() - 1) }
+    );
+    await OwnerCommissionRule.create({
+      ownerId: owner._id,
+      commissionPerHour: ownerCommissionPerHour,
+      effectiveFrom: today,
+      effectiveTo: null
+    });
+  }
+
+  return owner;
 }
 
 async function ensureDefaultBusinesses() {
@@ -77,19 +137,29 @@ async function createBusiness(payload) {
       {
         name: payload.name,
         slug,
+        ownerName: payload.ownerName,
+        ownerPhone: payload.ownerPhone,
+        ownerCommissionPerHour: Number(payload.ownerCommissionPerHour) || 0,
+        ownerWorkerCount: Number(payload.ownerWorkerCount) || 0,
         calcType: payload.calcType || existing.calcType || "tailor_slab_v1",
         isActive: true
       },
       { new: true }
     );
+    await syncOwnerForBusiness(restored, payload);
     return restored.toObject ? restored.toObject() : restored;
   }
 
   const created = await Business.create({
     name: payload.name,
     slug,
+    ownerName: payload.ownerName,
+    ownerPhone: payload.ownerPhone,
+    ownerCommissionPerHour: Number(payload.ownerCommissionPerHour) || 0,
+    ownerWorkerCount: Number(payload.ownerWorkerCount) || 0,
     calcType: payload.calcType || "tailor_slab_v1"
   });
+  await syncOwnerForBusiness(created, payload);
   return created.toObject ? created.toObject() : created;
 }
 
@@ -115,6 +185,18 @@ async function updateBusiness(idOrSlug, payload) {
   if (typeof payload.name === "string" && payload.name.trim()) {
     updates.name = payload.name.trim();
   }
+  if (typeof payload.ownerName === "string") {
+    updates.ownerName = payload.ownerName.trim();
+  }
+  if (typeof payload.ownerPhone === "string") {
+    updates.ownerPhone = payload.ownerPhone.trim();
+  }
+  if (typeof payload.ownerCommissionPerHour !== "undefined") {
+    updates.ownerCommissionPerHour = Number(payload.ownerCommissionPerHour) || 0;
+  }
+  if (typeof payload.ownerWorkerCount !== "undefined") {
+    updates.ownerWorkerCount = Number(payload.ownerWorkerCount) || 0;
+  }
   if (payload.calcType) {
     updates.calcType = payload.calcType;
   }
@@ -127,6 +209,7 @@ async function updateBusiness(idOrSlug, payload) {
   if (!row) {
     throw new ApiError(404, "Business not found");
   }
+  await syncOwnerForBusiness(row, updates);
   return row;
 }
 
@@ -143,6 +226,10 @@ async function deleteBusiness(idOrSlug) {
   }
 
   await Business.updateOne({ _id: row._id }, { isActive: false });
+  await Owner.updateMany(
+    { businessType: row.slug, isActive: true },
+    { isActive: false, deletedAt: new Date() }
+  );
   return { message: "Business deleted" };
 }
 

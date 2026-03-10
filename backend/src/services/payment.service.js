@@ -1,12 +1,11 @@
 const Employee = require("../models/Employee.model");
 const Owner = require("../models/Owner.model");
 const Business = require("../models/Business.model");
-const OwnerDailyHours = require("../models/OwnerDailyHours.model");
-const OwnerCommissionRule = require("../models/OwnerCommissionRule.model");
 const WorkEntry = require("../models/WorkEntry.model");
 const PaymentLog = require("../models/PaymentLog.model");
 const ApiError = require("../utils/ApiError");
 const { parseYyyyMmDd } = require("../utils/date");
+const { getOwnerDerivedAmountForPeriod, getOwnersWithCurrentCommission } = require("./owner.service");
 const {
   metricExpressionForCalcTypeWithRule
 } = require("./payout.service");
@@ -30,6 +29,13 @@ function dateKey(date) {
 }
 
 function rangeBounds({ rangeType = "month", startDate, endDate } = {}) {
+  if (rangeType === "all") {
+    return {
+      start: new Date(Date.UTC(1970, 0, 1)),
+      end: utcEndOfDay(new Date())
+    };
+  }
+
   const nowUtc = new Date();
   const todayStart = utcStartOfDay(nowUtc);
   const todayEnd = utcEndOfDay(nowUtc);
@@ -134,7 +140,7 @@ async function getEmployeeDerivedByBusiness(businessType, calcType, start, end) 
     {
       $match: {
         businessType,
-        isDeleted: false,
+        isDeleted: { $ne: true },
         workDate: { $gte: start, $lte: end }
       }
     },
@@ -172,7 +178,7 @@ async function getDailyEarnedByBusiness(businessType, calcType, start, end) {
     {
       $match: {
         businessType,
-        isDeleted: false,
+        isDeleted: { $ne: true },
         workDate: { $gte: start, $lte: end }
       }
     },
@@ -236,60 +242,18 @@ async function getEarnedTrend({ businessType = "all", start, end }) {
   return trend;
 }
 
-function commissionForDate(rules, date) {
-  for (const rule of rules) {
-    const fromOk = rule.effectiveFrom <= date;
-    const toOk = !rule.effectiveTo || rule.effectiveTo >= date;
-    if (fromOk && toOk) {
-      return Number(rule.commissionPerHour) || 0;
-    }
-  }
-  return 0;
-}
-
 async function getOwnerDerivedMap(start, end) {
-  const owners = await Owner.find({ isActive: true }).lean();
-  if (!owners.length) {
-    return new Map();
-  }
+  const owners = await getOwnersWithCurrentCommission();
+  const rows = await Promise.all(
+    owners.map(async (owner) => ({
+      ownerId: String(owner._id),
+      totals: await getOwnerDerivedAmountForPeriod(owner._id, start, end)
+    }))
+  );
 
-  const ownerIds = owners.map((owner) => owner._id);
-  const [hoursRows, rules] = await Promise.all([
-    OwnerDailyHours.find({
-      ownerId: { $in: ownerIds },
-      workDate: { $gte: start, $lte: end }
-    }).lean(),
-    OwnerCommissionRule.find({
-      ownerId: { $in: ownerIds },
-      effectiveFrom: { $lte: end },
-      $or: [{ effectiveTo: null }, { effectiveTo: { $gte: start } }]
-    })
-      .sort({ effectiveFrom: -1 })
-      .lean()
-  ]);
-
-  const rulesByOwner = new Map();
-  rules.forEach((rule) => {
-    const key = String(rule.ownerId);
-    if (!rulesByOwner.has(key)) {
-      rulesByOwner.set(key, []);
-    }
-    rulesByOwner.get(key).push(rule);
-  });
-
-  const totals = new Map();
-  hoursRows.forEach((row) => {
-    const ownerKey = String(row.ownerId);
-    const day = utcStartOfDay(new Date(row.workDate));
-    const rate = commissionForDate(rulesByOwner.get(ownerKey) || [], day);
-    const existing = totals.get(ownerKey) || { hoursWorked: 0, computedAmount: 0 };
-    const hours = Number(row.hours) || 0;
-    existing.hoursWorked += hours;
-    existing.computedAmount += hours * rate;
-    totals.set(ownerKey, existing);
-  });
-
-  return totals;
+  return new Map(
+    rows.map((row) => [row.ownerId, row.totals])
+  );
 }
 
 async function getEntityDerivedMap({ businessType = "all", start, end }) {
@@ -409,6 +373,39 @@ function parsePaymentDoc(payment) {
   };
 }
 
+async function getExistingPaidAmountForExactPeriod({
+  businessType,
+  employeeId = null,
+  ownerId = null,
+  periodStart,
+  periodEnd,
+  excludePaymentId = null
+}) {
+  const match = {
+    businessType,
+    employeeId: employeeId || null,
+    ownerId: ownerId || null,
+    periodStart,
+    periodEnd
+  };
+
+  if (excludePaymentId) {
+    match._id = { $ne: excludePaymentId };
+  }
+
+  const rows = await PaymentLog.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: null,
+        totalPaid: { $sum: "$paidAmount" }
+      }
+    }
+  ]);
+
+  return Number(rows[0]?.totalPaid) || 0;
+}
+
 async function getDerivedAmountForEmployeePeriod(employeeId, businessType, periodStart, periodEnd) {
   const business = await Business.findOne({ slug: businessType, isActive: true }).lean();
   if (!business) {
@@ -419,7 +416,7 @@ async function getDerivedAmountForEmployeePeriod(employeeId, businessType, perio
       $match: {
         employeeId,
         businessType,
-        isDeleted: false,
+        isDeleted: { $ne: true },
         workDate: { $gte: periodStart, $lte: periodEnd }
       }
     },
@@ -455,33 +452,7 @@ async function getDerivedAmountForEmployeePeriod(employeeId, businessType, perio
 }
 
 async function getDerivedAmountForOwnerPeriod(ownerId, periodStart, periodEnd) {
-  const owner = await Owner.findOne({ _id: ownerId, isActive: true }).lean();
-  if (!owner) {
-    throw new ApiError(404, "Owner not found or inactive");
-  }
-
-  const [hoursRows, rules] = await Promise.all([
-    OwnerDailyHours.find({ ownerId, workDate: { $gte: periodStart, $lte: periodEnd } }).lean(),
-    OwnerCommissionRule.find({
-      ownerId,
-      effectiveFrom: { $lte: periodEnd },
-      $or: [{ effectiveTo: null }, { effectiveTo: { $gte: periodStart } }]
-    })
-      .sort({ effectiveFrom: -1 })
-      .lean()
-  ]);
-
-  return hoursRows.reduce(
-    (acc, row) => {
-      const day = utcStartOfDay(new Date(row.workDate));
-      const rate = commissionForDate(rules, day);
-      const hours = Number(row.hours) || 0;
-      acc.hoursWorked += hours;
-      acc.computedAmount += hours * rate;
-      return acc;
-    },
-    { hoursWorked: 0, computedAmount: 0 }
-  );
+  return getOwnerDerivedAmountForPeriod(ownerId, periodStart, periodEnd);
 }
 
 async function createPaymentLog(payload, adminId) {
@@ -526,7 +497,15 @@ async function createPaymentLog(payload, adminId) {
   }
 
   const paidAmount = Number(payload.paidAmount) || 0;
-  const status = payload.status || safeStatus(computed.computedAmount, paidAmount);
+  const existingPaidAmount = await getExistingPaidAmountForExactPeriod({
+    businessType: payload.businessType,
+    employeeId: payload.employeeId || null,
+    ownerId: payload.ownerId || null,
+    periodStart,
+    periodEnd
+  });
+  const totalPaidForPeriod = existingPaidAmount + paidAmount;
+  const status = payload.status || safeStatus(computed.computedAmount, totalPaidForPeriod);
   const paidAt = status === "pending" ? null : new Date();
 
   const created = await PaymentLog.create({
@@ -568,10 +547,20 @@ async function updatePaymentLog(paymentId, payload) {
     payment.notes = payload.notes;
   }
 
+  const existingPaidAmount = await getExistingPaidAmountForExactPeriod({
+    businessType: payment.businessType,
+    employeeId: payment.employeeId || null,
+    ownerId: payment.ownerId || null,
+    periodStart: payment.periodStart,
+    periodEnd: payment.periodEnd,
+    excludePaymentId: payment._id
+  });
+  const totalPaidForPeriod = existingPaidAmount + (Number(payment.paidAmount) || 0);
+
   if (typeof payload.status !== "undefined") {
     payment.status = payload.status;
   } else {
-    payment.status = safeStatus(payment.computedAmount, payment.paidAmount);
+    payment.status = safeStatus(payment.computedAmount, totalPaidForPeriod);
   }
 
   payment.paidAt = payment.status === "pending" ? null : new Date();
@@ -662,7 +651,7 @@ async function listPaymentsWithBalances({ businessType = "all", rangeType, start
   const filtered = matchBySearch(rows, search).sort((a, b) => b.pendingBalance - a.pendingBalance);
 
   return {
-    filters: { businessType, rangeType: rangeType || "month", startDate, endDate },
+    filters: { businessType, rangeType: rangeType || "all", startDate, endDate },
     rows: filtered
   };
 }
@@ -735,7 +724,7 @@ async function getSummary({ businessType = "all", rangeType, startDate, endDate 
   });
 
   return {
-    filters: { businessType, rangeType: rangeType || "month", startDate, endDate },
+    filters: { businessType, rangeType: rangeType || "all", startDate, endDate },
     totalEarned,
     totalPaid,
     pendingBalance: totalEarned - totalPaid,
