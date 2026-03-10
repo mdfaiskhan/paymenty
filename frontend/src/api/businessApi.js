@@ -10,6 +10,18 @@ export async function createBusinessApi(payload) {
   return data;
 }
 
+export async function updateBusinessApi(idOrSlug, payload) {
+  const target = encodeURIComponent(String(idOrSlug || "").trim());
+  const { data } = await apiClient.put(`/api/businesses/${target}`, payload);
+  return data;
+}
+
+export async function deleteBusinessApi(idOrSlug) {
+  const target = encodeURIComponent(String(idOrSlug || "").trim());
+  const { data } = await apiClient.delete(`/api/businesses/${target}`);
+  return data;
+}
+
 export async function getEmployeesApi({ businessType, search = "" }) {
   const { data } = await apiClient.get("/api/employees", {
     params: { businessType, search: search || undefined }

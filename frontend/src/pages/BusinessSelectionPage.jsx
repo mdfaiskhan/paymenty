@@ -3,16 +3,22 @@ import { useMemo, useState } from "react";
 import { useBusinesses } from "../context/BusinessContext";
 
 export default function BusinessSelectionPage() {
-  const { businesses, loading, error, addBusiness } = useBusinesses();
+  const { businesses, loading, error, addBusiness, editBusiness, removeBusiness } = useBusinesses();
   const [form, setForm] = useState({ name: "", slug: "", calcType: "tailor_slab_v1" });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [editForm, setEditForm] = useState({ name: "", calcType: "tailor_slab_v1" });
 
   const sortedBusinesses = useMemo(
     () => [...businesses].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))),
     [businesses]
   );
+
+  function businessIdentifier(row) {
+    return String(row?._id || row?.slug || "").trim();
+  }
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -30,6 +36,62 @@ export default function BusinessSelectionPage() {
     }
   }
 
+  function beginEdit(row) {
+    setEditingId(businessIdentifier(row));
+    setEditForm({
+      name: row.name || "",
+      calcType: row.calcType || "tailor_slab_v1"
+    });
+    setSaveError("");
+    setSaveMessage("");
+  }
+
+  async function saveEdit(row) {
+    const id = businessIdentifier(row);
+    if (!id) {
+      setSaveError("Cannot edit this business record");
+      return;
+    }
+
+    setSaving(true);
+    setSaveError("");
+    setSaveMessage("");
+    try {
+      await editBusiness(id, editForm);
+      setEditingId("");
+      setSaveMessage("Business updated");
+    } catch (err) {
+      setSaveError(err.response?.data?.message || err.message || "Could not update business");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onDelete(row) {
+    const id = businessIdentifier(row);
+    if (!id) {
+      setSaveError("Cannot delete this business record");
+      return;
+    }
+    const ok = window.confirm(`Delete business ${row.name}?`);
+    if (!ok) return;
+
+    setSaving(true);
+    setSaveError("");
+    setSaveMessage("");
+    try {
+      await removeBusiness(id);
+      if (editingId === id) {
+        setEditingId("");
+      }
+      setSaveMessage("Business deleted");
+    } catch (err) {
+      setSaveError(err.response?.data?.message || err.message || "Could not delete business");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <section>
       <h1>Earnings Hub</h1>
@@ -37,12 +99,52 @@ export default function BusinessSelectionPage() {
       {error ? <p className="error-text">{error}</p> : null}
       {loading ? <p className="card">Loading businesses...</p> : null}
       <div className="business-grid">
-        {sortedBusinesses.map((business) => (
-          <Link className="card business-card dynamic-business" key={business.slug} to={`/business/${business.slug}`}>
-            <h2>{business.name}</h2>
-            <p>{business.calcType === "butcher_cuts_v1" ? "Cuts per hour model" : "Slab earnings model"}</p>
-          </Link>
-        ))}
+        {sortedBusinesses.map((business) => {
+          const isEditing = editingId && editingId === businessIdentifier(business);
+          return (
+            <article className="card business-card dynamic-business" key={business.slug}>
+              {!isEditing ? (
+                <>
+                  <Link to={`/business/${business.slug}`}>
+                    <h2>{business.name}</h2>
+                    <p>{business.calcType === "butcher_cuts_v1" ? "Cuts per hour model" : "Slab earnings model"}</p>
+                  </Link>
+                  <div className="action-row">
+                    <button className="button small ghost" type="button" onClick={() => beginEdit(business)}>
+                      Edit
+                    </button>
+                    <button className="button small danger" type="button" onClick={() => onDelete(business)}>
+                      Delete
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <input
+                    value={editForm.name}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="Business Name"
+                  />
+                  <select
+                    value={editForm.calcType}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, calcType: e.target.value }))}
+                  >
+                    <option value="tailor_slab_v1">Earnings (slab based)</option>
+                    <option value="butcher_cuts_v1">Cuts (per-hour)</option>
+                  </select>
+                  <div className="action-row">
+                    <button className="button small" type="button" disabled={saving} onClick={() => saveEdit(business)}>
+                      Save
+                    </button>
+                    <button className="button small ghost" type="button" onClick={() => setEditingId("")}>
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
+            </article>
+          );
+        })}
       </div>
 
       <article className="card section-card">

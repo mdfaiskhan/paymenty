@@ -93,10 +93,63 @@ async function createBusiness(payload) {
   return created.toObject ? created.toObject() : created;
 }
 
+function businessFilterByIdentifier(idOrSlug) {
+  const raw = String(idOrSlug || "").trim();
+  if (!raw) {
+    throw new ApiError(400, "Invalid business identifier");
+  }
+
+  if (/^[a-f\d]{24}$/i.test(raw)) {
+    return { _id: raw, isActive: true };
+  }
+
+  const slug = toSlug(raw);
+  if (!slug) {
+    throw new ApiError(400, "Invalid business identifier");
+  }
+  return { slug, isActive: true };
+}
+
+async function updateBusiness(idOrSlug, payload) {
+  const updates = {};
+  if (typeof payload.name === "string" && payload.name.trim()) {
+    updates.name = payload.name.trim();
+  }
+  if (payload.calcType) {
+    updates.calcType = payload.calcType;
+  }
+
+  if (!Object.keys(updates).length) {
+    throw new ApiError(400, "No fields to update");
+  }
+
+  const row = await Business.findOneAndUpdate(businessFilterByIdentifier(idOrSlug), updates, { new: true }).lean();
+  if (!row) {
+    throw new ApiError(404, "Business not found");
+  }
+  return row;
+}
+
+async function deleteBusiness(idOrSlug) {
+  const row = await Business.findOneAndUpdate(
+    businessFilterByIdentifier(idOrSlug),
+    { isActive: false },
+    { new: true }
+  ).lean();
+
+  if (!row) {
+    throw new ApiError(404, "Business not found");
+  }
+
+  return { message: "Business deleted" };
+}
+
 module.exports = {
   toSlug,
   ensureDefaultBusinesses,
   listActiveBusinesses,
   getBusinessBySlug,
-  createBusiness
+  createBusiness,
+  updateBusiness,
+  deleteBusiness
 };

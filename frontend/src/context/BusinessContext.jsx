@@ -1,5 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { createBusinessApi, getBusinessesApi, getEmployeesApi } from "../api/businessApi";
+import {
+  createBusinessApi,
+  updateBusinessApi,
+  deleteBusinessApi,
+  getBusinessesApi,
+  getEmployeesApi
+} from "../api/businessApi";
 
 const BusinessContext = createContext(null);
 
@@ -90,6 +96,22 @@ export function BusinessProvider({ children }) {
     return created;
   }
 
+  async function editBusiness(id, payload) {
+    const normalizedPayload = {
+      ...(payload?.name ? { name: String(payload.name).trim() } : {}),
+      ...(payload?.calcType ? { calcType: payload.calcType } : {})
+    };
+    const updated = await updateBusinessApi(id, normalizedPayload);
+    await refreshBusinesses();
+    return updated;
+  }
+
+  async function removeBusiness(id) {
+    const removed = await deleteBusinessApi(id);
+    await refreshBusinesses();
+    return removed;
+  }
+
   useEffect(() => {
     refreshBusinesses();
   }, []);
@@ -100,7 +122,9 @@ export function BusinessProvider({ children }) {
       loading,
       error,
       refreshBusinesses,
-      addBusiness
+      addBusiness,
+      editBusiness,
+      removeBusiness
     }),
     [businesses, loading, error]
   );
