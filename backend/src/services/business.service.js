@@ -131,16 +131,18 @@ async function updateBusiness(idOrSlug, payload) {
 }
 
 async function deleteBusiness(idOrSlug) {
-  const row = await Business.findOneAndUpdate(
-    businessFilterByIdentifier(idOrSlug),
-    { isActive: false },
-    { new: true }
-  ).lean();
-
+  const baseFilter = businessFilterByIdentifier(idOrSlug);
+  const row = await Business.findOne(baseFilter).lean();
   if (!row) {
-    throw new ApiError(404, "Business not found");
+    // Idempotent delete behavior: treat missing record as already deleted.
+    return { message: "Business already deleted" };
   }
 
+  if (!row.isActive) {
+    return { message: "Business already deleted" };
+  }
+
+  await Business.updateOne({ _id: row._id }, { isActive: false });
   return { message: "Business deleted" };
 }
 
