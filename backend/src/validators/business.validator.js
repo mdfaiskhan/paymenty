@@ -43,6 +43,14 @@ const deleteBusinessSchema = z.object({
   params: z.object({ idOrSlug: businessIdentifier })
 });
 
+const deleteBusinessActionSchema = z.object({
+  body: z.object({
+    idOrSlug: businessIdentifier
+  }),
+  query: z.object({}).passthrough(),
+  params: z.object({}).passthrough()
+});
+
 const listBusinessSchema = z.object({
   body: z.object({}).passthrough(),
   query: z.object({}).passthrough(),
@@ -53,5 +61,6 @@ module.exports = {
   createBusinessSchema,
   updateBusinessSchema,
   deleteBusinessSchema,
+  deleteBusinessActionSchema,
   listBusinessSchema
 };

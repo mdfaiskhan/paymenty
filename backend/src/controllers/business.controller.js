@@ -43,9 +43,20 @@ async function removeBusiness(req, res, next) {
   }
 }
 
+async function removeBusinessAction(req, res, next) {
+  try {
+    const { idOrSlug } = req.validated.body;
+    const row = await deleteBusiness(idOrSlug);
+    return res.status(200).json(row);
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   listBusinesses,
   addBusiness,
   editBusiness,
-  removeBusiness
+  removeBusiness,
+  removeBusinessAction
 };

@@ -18,8 +18,17 @@ export async function updateBusinessApi(idOrSlug, payload) {
 
 export async function deleteBusinessApi(idOrSlug) {
   const target = encodeURIComponent(String(idOrSlug || "").trim());
-  const { data } = await apiClient.delete(`/api/businesses/${target}`);
-  return data;
+  try {
+    const { data } = await apiClient.delete(`/api/businesses/${target}`);
+    return data;
+  } catch (error) {
+    const status = Number(error?.response?.status || 0);
+    if (status === 404 || status === 405) {
+      const { data } = await apiClient.post("/api/businesses/delete", { idOrSlug: String(idOrSlug || "").trim() });
+      return data;
+    }
+    throw error;
+  }
 }
 
 export async function getEmployeesApi({ businessType, search = "" }) {
