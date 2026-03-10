@@ -60,6 +60,7 @@ export default function OwnerExpenditurePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [analytics, setAnalytics] = useState({ cards: {}, owners: [] });
+  const [ownerPaymentRange, setOwnerPaymentRange] = useState("all");
   const [sortBy, setSortBy] = useState("monthDesc");
 
   const [commissionModal, setCommissionModal] = useState(null);
@@ -69,7 +70,7 @@ export default function OwnerExpenditurePage() {
   });
 
   const [breakdownOwner, setBreakdownOwner] = useState(null);
-  const [breakdownMode, setBreakdownMode] = useState("month");
+  const [breakdownMode, setBreakdownMode] = useState("all");
   const [breakdownMonth, setBreakdownMonth] = useState(getCurrentMonth());
   const [breakdownStartDate, setBreakdownStartDate] = useState(todayDateOnly());
   const [breakdownEndDate, setBreakdownEndDate] = useState(todayDateOnly());
@@ -111,6 +112,7 @@ export default function OwnerExpenditurePage() {
       ),
     [businessSettlement.items]
   );
+  const paymentRangeLabel = ownerPaymentRange === "all" ? "All Time" : "Month";
 
   async function loadAnalytics() {
     setLoading(true);
@@ -119,14 +121,14 @@ export default function OwnerExpenditurePage() {
       const businessSummaries = await Promise.all(
         businessOptions.map(async (business) => ({
           business,
-          summary: await getPaymentsSummaryApi({ businessType: business.slug, rangeType: "month" })
+          summary: await getPaymentsSummaryApi({ businessType: business.slug, rangeType: ownerPaymentRange })
         }))
       );
 
       const [data, settlementSummary, settlementRows] = await Promise.all([
         getOwnersAnalyticsApi(),
-        getOwnerPaymentsSummaryApi({ rangeType: "month" }),
-        getOwnerPaymentsApi({ rangeType: "month" })
+        getOwnerPaymentsSummaryApi({ rangeType: ownerPaymentRange }),
+        getOwnerPaymentsApi({ rangeType: ownerPaymentRange })
       ]);
       setAnalytics(data);
       setOwnerSettlement(settlementSummary);
@@ -151,7 +153,7 @@ export default function OwnerExpenditurePage() {
     if (unlocked) {
       loadAnalytics();
     }
-  }, [unlocked, businessOptions]);
+  }, [unlocked, businessOptions, ownerPaymentRange]);
 
   useEffect(() => {
     return () => {
@@ -241,7 +243,7 @@ export default function OwnerExpenditurePage() {
 
   async function openBreakdown(owner) {
     setBreakdownOwner(owner);
-    await loadBreakdown(owner.ownerId, "month", {
+    await loadBreakdown(owner.ownerId, breakdownMode, {
       month: breakdownMonth,
       startDate: breakdownStartDate,
       endDate: breakdownEndDate
@@ -253,7 +255,9 @@ export default function OwnerExpenditurePage() {
     setError("");
     try {
       const params =
-        mode === "month"
+        mode === "all"
+          ? { rangeType: "all" }
+          : mode === "month"
           ? { month: values.month }
           : { startDate: values.startDate, endDate: values.endDate };
       const data = await getOwnerBreakdownApi(ownerId, params);
@@ -410,6 +414,10 @@ export default function OwnerExpenditurePage() {
           <p>Owner commission is calculated from employee work logs for each business.</p>
         </div>
         <div className="filters">
+          <select value={ownerPaymentRange} onChange={(e) => setOwnerPaymentRange(e.target.value)}>
+            <option value="all">All Time</option>
+            <option value="month">This Month</option>
+          </select>
           <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
             <option value="monthDesc">Month Commission: High to Low</option>
             <option value="monthAsc">Month Commission: Low to High</option>
@@ -436,16 +444,16 @@ export default function OwnerExpenditurePage() {
         </article>
         {businessSettlement.items.map((item) => (
           <article className="card metric-card" key={item.businessType}>
-            <p>{item.businessName} Employee Payment (Month)</p>
+            <p>{item.businessName} Employee Payment ({paymentRangeLabel})</p>
             <h3>INR {formatMoney(item.earned)}</h3>
           </article>
         ))}
         <article className="card metric-card">
-          <p>Total Employee Payment (Month)</p>
+          <p>Total Employee Payment ({paymentRangeLabel})</p>
           <h3>INR {formatMoney(businessSettlement.totalEarned)}</h3>
         </article>
         <article className="card metric-card">
-          <p>Owner Cut (Month)</p>
+          <p>Owner Cut ({paymentRangeLabel})</p>
           <h3>INR {formatMoney(ownerSettlement.totalEarned)}</h3>
         </article>
         <article className="card metric-card">
@@ -719,12 +727,13 @@ export default function OwnerExpenditurePage() {
             value={breakdownMode}
             onChange={(e) => updateBreakdownMode(e.target.value)}
           >
+            <option value="all">All Time</option>
             <option value="month">Monthly</option>
             <option value="range">Date Range</option>
           </select>
           {breakdownMode === "month" ? (
             <input type="month" value={breakdownMonth} onChange={(e) => updateBreakdownMonth(e.target.value)} />
-          ) : (
+          ) : breakdownMode === "range" ? (
             <>
               <input
                 type="date"
@@ -737,7 +746,7 @@ export default function OwnerExpenditurePage() {
                 onChange={(e) => updateBreakdownRange(breakdownStartDate, e.target.value)}
               />
             </>
-          )}
+          ) : null}
           <button className="button ghost" type="button" onClick={exportBreakdownCsv}>
             Export CSV
           </button>

@@ -88,25 +88,27 @@ const ownerBreakdownSchema = z.object({
   body: z.object({}).passthrough(),
   query: z
     .object({
+      rangeType: z.enum(["all"]).optional(),
       month: z.string().regex(/^\d{4}-\d{2}$/, "Month must be YYYY-MM").optional(),
       startDate: dateOnly.optional(),
       endDate: dateOnly.optional()
     })
     .superRefine((query, ctx) => {
+      const isAllTime = query.rangeType === "all";
       const hasMonth = Boolean(query.month);
       const hasRange = Boolean(query.startDate || query.endDate);
 
-      if (!hasMonth && !hasRange) {
+      if (!isAllTime && !hasMonth && !hasRange) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "Provide month or startDate/endDate"
+          message: "Provide rangeType=all, month, or startDate/endDate"
         });
       }
 
-      if (hasMonth && hasRange) {
+      if ((isAllTime && hasMonth) || (isAllTime && hasRange) || (hasMonth && hasRange)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "Use either month or startDate/endDate, not both"
+          message: "Use only one filter: rangeType=all, month, or startDate/endDate"
         });
       }
 

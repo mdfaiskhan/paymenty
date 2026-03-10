@@ -48,7 +48,14 @@ function periodBounds(range) {
   return { start: monthStart, end: monthEnd };
 }
 
-function parseCustomBounds({ month, startDate, endDate }) {
+function parseCustomBounds({ rangeType, month, startDate, endDate }) {
+  if (rangeType === "all") {
+    return {
+      start: new Date(Date.UTC(1970, 0, 1)),
+      end: utcEndOfDay(new Date())
+    };
+  }
+
   if (month) {
     const [year, mm] = month.split("-").map(Number);
     return {
@@ -482,7 +489,12 @@ async function getOwnerBreakdown(ownerId, query) {
       businessType: owner.businessType,
       businessName: business.name
     },
-    range: query.month ? { month: query.month } : { startDate: query.startDate, endDate: query.endDate },
+    range:
+      query.rangeType === "all"
+        ? { rangeType: "all" }
+        : query.month
+          ? { month: query.month }
+          : { startDate: query.startDate, endDate: query.endDate },
     totals,
     rows
   };
