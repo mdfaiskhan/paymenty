@@ -25,10 +25,10 @@ function tailorEarningsExpressionWithRule(dayHoursPath = "$dayHours", rulePath =
               {
                 $switch: {
                   branches: [
-                    { case: { $lt: [dayHoursPath, "$$s1"] }, then: "$$r0" },
+                    { case: { $lte: [dayHoursPath, "$$s0"] }, then: "$$r0" },
                     {
                       case: {
-                        $and: [{ $gte: [dayHoursPath, "$$s1"] }, { $lt: [dayHoursPath, "$$s2"] }]
+                        $and: [{ $gt: [dayHoursPath, "$$s0"] }, { $lt: [dayHoursPath, "$$s2"] }]
                       },
                       then: "$$r1"
                     }

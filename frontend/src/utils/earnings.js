@@ -5,7 +5,7 @@ function toNumber(value, fallback = 0) {
 
 export function calculateTailorEarnings(hours) {
   const h = toNumber(hours, 0);
-  if (h < 4) return h * 100;
+  if (h <= 3) return h * 100;
   if (h < 5) return h * 150;
   return h * 200;
 }
