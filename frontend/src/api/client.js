@@ -1,8 +1,29 @@
 import axios from "axios";
 
 const TOKEN_KEY = "paymenty_token";
+const FORCE_RENDER_API_KEY = "paymenty_force_render_api";
 const LOCAL_API_URL = "http://localhost:5000";
 const RENDER_API_URL = "https://paymenty-backend.onrender.com";
+const DEFAULT_TIMEOUT_MS = 30000;
+const LOCAL_FALLBACK_TIMEOUT_MS = 4000;
+
+function canUseSessionStorage() {
+  return typeof window !== "undefined" && Boolean(window.sessionStorage);
+}
+
+function shouldForceRenderApi() {
+  return canUseSessionStorage() && window.sessionStorage.getItem(FORCE_RENDER_API_KEY) === "true";
+}
+
+function markRenderApiForced() {
+  if (canUseSessionStorage()) {
+    window.sessionStorage.setItem(FORCE_RENDER_API_KEY, "true");
+  }
+}
+
+function isLocalApiUrl(url) {
+  return /localhost|127\.0\.0\.1/i.test(String(url || ""));
+}
 
 function resolveApiBaseUrl() {
   const isLocalRuntime = typeof window !== "undefined"
@@ -10,10 +31,14 @@ function resolveApiBaseUrl() {
     : true;
   const useLocalApi = String(import.meta.env.VITE_USE_LOCAL_API || "").trim().toLowerCase() === "true";
 
+  if (shouldForceRenderApi()) {
+    return RENDER_API_URL;
+  }
+
   // Highest priority: explicit environment variable
   const envUrl = String(import.meta.env.VITE_API_BASE_URL || "").trim();
   if (envUrl) {
-    const isEnvLocalUrl = /localhost|127\.0\.0\.1/i.test(envUrl);
+    const isEnvLocalUrl = isLocalApiUrl(envUrl);
     // Guard against accidental misconfiguration:
     // - deployed frontend should never use localhost
     // - local frontend uses localhost only when explicitly allowed
@@ -33,10 +58,16 @@ function resolveApiBaseUrl() {
 
 const apiClient = axios.create({
   baseURL: resolveApiBaseUrl(),
-  timeout: 30000
+  timeout: DEFAULT_TIMEOUT_MS
 });
 
 let keepAliveTimer = null;
+
+function switchToRenderApi() {
+  apiClient.defaults.baseURL = RENDER_API_URL;
+  markRenderApiForced();
+  startRenderKeepAlive();
+}
 
 function startRenderKeepAlive() {
   if (keepAliveTimer || typeof window === "undefined") {
@@ -69,6 +100,12 @@ export function attachToken(token) {
 startRenderKeepAlive();
 
 apiClient.interceptors.request.use((config) => {
+  const baseUrl = String(config.baseURL || apiClient.defaults.baseURL || "");
+  if (isLocalApiUrl(baseUrl)) {
+    const configuredTimeout = Number(config.timeout || DEFAULT_TIMEOUT_MS);
+    config.timeout = Math.min(configuredTimeout, LOCAL_FALLBACK_TIMEOUT_MS);
+  }
+
   if (!config.headers.Authorization) {
     const token = localStorage.getItem(TOKEN_KEY);
     if (token) {
@@ -96,7 +133,7 @@ apiClient.interceptors.response.use(
     // Retry once on local backend failures by switching from local API to Render API.
     // Handles network failure, wrong local service 404, and old-schema 400 errors.
     if (originalConfig && !originalConfig.__fallbackRetried) {
-      const isLocalBase = /localhost|127\.0\.0\.1/i.test(currentBaseUrl);
+      const isLocalBase = isLocalApiUrl(currentBaseUrl);
       const shouldFallback =
         !hasResponse ||
         (status === 404 && isApiPath) ||
@@ -111,6 +148,7 @@ apiClient.interceptors.response.use(
           delete nextParams.endDate;
           originalConfig.params = nextParams;
         }
+        switchToRenderApi();
         originalConfig.baseURL = RENDER_API_URL;
         return apiClient.request(originalConfig);
       }
